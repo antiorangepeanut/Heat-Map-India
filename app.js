@@ -3,7 +3,7 @@
   const $ = s => document.querySelector(s);
   const CFG = window.HEATMAP_CONFIG || {};
   const state = {
-    lookup: new Map(), datasets: [], active: null, layers: [], infoFields: [],
+    lookup: new Map(), datasets: [], active: null, layers: [],
     points: [], pointByPin: new Map(), hits: [], pinnedPin: null,
     map: null, ov: null, canvas: null, cursor: false,
     layersTouched: false, activeTouched: false, needFit: false
@@ -367,20 +367,6 @@
     $('#slicers').append(wrap);
   }
 
-  function showSlicers() {
-    state.datasets.forEach(d => { if (d.slicerEl) d.slicerEl.style.display = 'none'; });
-    const a = state.active;
-    if (a) {
-      if (!a.slicerEl) buildSlicerUI(a);
-      a.slicerEl.style.display = '';
-      $('#slicerSection').style.display = 'block';
-    } else {
-      $('#slicerSection').style.display = 'none';
-    }
-    $('#slicerTitle').textContent = (a && multi()) ? 'Slicers · ' + a.name : 'Slicers';
-    $('#resetSlicers').style.display = a ? '' : 'none';
-  }
-
   function setPinCol(d, col) {
     d.pinCol = col;
     d.pins = d.rows.map(r => normPin(r[col]));
@@ -412,11 +398,13 @@
   }
 
   function syncDataControls() {
-    $('#dataControls').style.display = state.active ? '' : 'none';
-    $('#sheetRow').style.display = multi() ? '' : 'none';
+    $('#sheetConfig').style.display = state.active ? 'block' : 'none';
+    $('#sheetRow').style.display = multi() ? 'block' : 'none';
+    
     const ss = $('#sheetSel'); ss.innerHTML = '';
     state.datasets.forEach(d => { const o = mk('option', '', d.name + ' (' + d.rows.length.toLocaleString() + ' rows)'); o.value = d.id; ss.append(o); });
     if (state.active) ss.value = state.active.id;
+    
     const ps = $('#pinCol'); ps.innerHTML = '';
     if (state.active) {
       state.active.cols.forEach(c => { const o = mk('option', '', c); o.value = c; ps.append(o); });
@@ -424,15 +412,25 @@
     }
   }
 
+  function showSlicers() {
+    state.datasets.forEach(d => { if (d.slicerEl) d.slicerEl.style.display = 'none'; });
+    const a = state.active;
+    if (a) {
+      if (!a.slicerEl) buildSlicerUI(a);
+      a.slicerEl.style.display = '';
+    }
+    $('#resetSlicers').style.display = a ? '' : 'none';
+  }
+
   function ingestSheets(sheets, label) {
     const ds = sheets.filter(s => s.rows.length).map((s, i) => {
-      const d = { id: i + 1, name: s.name, rows: s.rows, cols: Object.keys(s.rows[0]), pins: [], pinCol: null, filters: {}, numCols: [], colType: {}, groups: new Map(), unm: new Map(), kept: 0, noPin: 0, slicerEl: null };
+      const d = { id: i + 1, name: s.name, rows: s.rows, cols: Object.keys(s.rows[0]), pins: [], pinCol: null, filters: {}, numCols: [], colType: {}, groups: new Map(), unm: new Map(), kept: 0, noPin: 0, slicerEl: null, infoFields: [] };
       d.pinCol = guessPinCol(d.cols, d.rows); setPinCol(d, d.pinCol); analyze(d);
       return d;
     });
     if (!ds.length) throw new Error('No sheet with data was found.');
     $('#slicers').innerHTML = '';
-    state.datasets = ds; state.infoFields = []; state.activeTouched = false;
+    state.datasets = ds; state.activeTouched = false;
     state.active = ds.find(d => d.matched > 0) || ds[0];
     autoLayers(); state.needFit = true;
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
@@ -552,24 +550,21 @@
 
   function renderInfoUI() {
     const host = $('#infoFields'); host.innerHTML = '';
-    state.infoFields = state.infoFields.filter(f => { const d = dsById(f.ds); return d && d.colType[f.col]; });
-    state.infoFields.forEach((f, i) => {
-      const d = dsById(f.ds);
+    const d = state.active;
+    if (!d) return;
+    
+    // Purge fields that no longer exist on this sheet
+    d.infoFields = d.infoFields.filter(f => d.colType[f.col]);
+    
+    d.infoFields.forEach((f, i) => {
       const row = mk('div', 'frow');
-      if (multi()) {
-        const ssel = mkSelect(state.datasets.map(x => [x.id, x.name]), f.ds, v => {
-          const nd = dsById(+v); f.ds = nd.id;
-          const cols = Object.keys(nd.colType);
-          if (!nd.colType[f.col]) f.col = cols[0];
-          f.agg = defaultAgg(nd, f.col); renderInfoUI();
-        });
-        ssel.className = 'full'; row.append(ssel);
-      }
       const sc = mkSelect(Object.keys(d.colType).map(c => [c, c]), f.col, v => { f.col = v; f.agg = defaultAgg(d, v); renderInfoUI(); });
       const sa = mkSelect(AGG_OPTS[d.colType[f.col]], f.agg, v => { f.agg = v; });
       const x = mk('button', '', '×'); x.title = 'Remove';
-      x.onclick = () => { state.infoFields.splice(i, 1); renderInfoUI(); };
-      row.append(sc, sa, x); host.append(row);
+      x.onclick = () => { d.infoFields.splice(i, 1); renderInfoUI(); };
+      
+      row.append(sc, sa, x); 
+      host.append(row);
     });
   }
 
@@ -608,17 +603,44 @@
 
   function describe(o) {
     const lines = ['Pincode ' + o.pin];
-    
-    state.layers.forEach(L => {
-      if (!L.visible) return;
-      const d = dsOf(L), g = d && o.per[d.id];
-      lines.push(labelOf(L) + ': ' + (g ? nf.format(layerCalc(L, g.idx)) : '—'));
+    const links = new Set();
+
+    // Iterate strictly through the available datasets to find user-added fields
+    state.datasets.forEach(d => {
+      const g = o.per[d.id];
+      if (!g) return;
+
+      // Add ONLY the explicit info fields the user selected for this sheet
+      d.infoFields.forEach(f => {
+        lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
+      });
+
+      // Automatically scan for URLs in columns related to links or maps
+      const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
+      g.idx.forEach(i => {
+        linkCols.forEach(c => {
+          const val = d.rows[i][c];
+          if (typeof val === 'string' && val.trim().startsWith('http')) {
+            links.add(val.trim());
+          }
+        });
+      });
     });
-    
-    state.infoFields.forEach(f => {
-      const d = dsById(f.ds), g = d && o.per[d.id];
-      lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + (g ? fieldValue(f, g.idx, d) : '—'));
+
+    // Generate clickable anchor tags for found URLs
+    links.forEach(url => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.textContent = '📍 ' + (url.toLowerCase().includes('maps') ? 'Google Maps Link' : 'Open Link');
+      Object.assign(a.style, { display: 'block', marginTop: '6px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
+      lines.push(a);
     });
+
+    if (lines.length === 1) {
+      lines.push('No extra info added.');
+    }
+
     return lines;
   }
 
@@ -648,7 +670,16 @@
     const lines = describe(o);
     $('#cardTitle').textContent = lines[0];
     const body = $('#cardBody'); body.innerHTML = '';
-    lines.slice(1).forEach(t => body.append(mk('div', '', t)));
+    
+    // Inject strings or HTML Elements (like the links)
+    lines.slice(1).forEach(t => {
+      if (t instanceof HTMLElement) {
+        body.append(t);
+      } else {
+        body.append(mk('div', '', t));
+      }
+    });
+    
     $('#card').style.display = 'block';
   }
   
@@ -876,10 +907,10 @@
   $('#addLayer').onclick = () => { state.layersTouched = true; state.layers.push(newLayer()); renderLayerUI(); refreshData(); };
   $('#addField').onclick = () => {
     const d = state.active;
-    if (!d) return setStatus('#dataStatus', 'Upload your data first, then pick columns for the info box.', 'err');
+    if (!d) return setStatus('#dataStatus', 'Upload your data first.', 'err');
     const col = Object.keys(d.colType)[0];
     if (!col) return;
-    state.infoFields.push({ ds: d.id, col, agg: defaultAgg(d, col) });
+    d.infoFields.push({ col, agg: defaultAgg(d, col) });
     renderInfoUI();
   };
 
@@ -894,7 +925,7 @@
   $('#dataFile').onchange = e => { const f = e.target.files[0]; if (f) loadData(f); };
   $('#sheetSel').onchange = e => {
     state.active = dsById(+e.target.value); state.activeTouched = true;
-    syncDataControls(); showSlicers();
+    syncDataControls(); showSlicers(); renderInfoUI();
   };
   $('#pinCol').onchange = e => {
     const d = state.active; if (!d) return;
