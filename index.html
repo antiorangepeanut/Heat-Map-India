@@ -92,23 +92,30 @@
   <section>
     <h2>Your data</h2>
     <input id="dataFile" type="file" accept=".xlsx,.xls,.csv">
-    <p id="dataStatus" class="note">Excel or CSV. Every sheet in an Excel file is loaded. It is read in your browser and never uploaded.</p>
+    <p id="dataStatus" class="note">Excel or CSV. Every sheet in an Excel file is loaded.</p>
     
-    <div id="sheetRow" class="field" style="display:none">
-      <span>Sheet you're working on</span>
-      <select id="sheetSel"></select>
-      <p class="help">The pincode column and slicers apply to this sheet. Heat layers pick their own sheet, so you can overlay different sheets.</p>
-    </div>
-    
-    <div id="dataControls" style="display:none">
-      <div class="field"><span>Which column holds the pincode?</span><select id="pinCol"></select></div>
-    </div>
+    <div id="sheetConfig" style="display:none; margin-top:12px; border-top:1px solid var(--line); padding-top:12px;">
+      <div id="sheetRow" class="field" style="display:none">
+        <span>Sheet you're working on</span>
+        <select id="sheetSel"></select>
+        <p class="help">The pin column, slicers, and info box apply specifically to this sheet.</p>
+      </div>
+      
+      <div class="field"><span>Pincode column</span><select id="pinCol"></select></div>
 
-    <div id="slicerSection" style="margin-top:16px; border-top:1px solid var(--line); padding-top:12px; display:none;">
-      <h2 id="slicerTitle">Slicers</h2>
-      <p class="help" style="margin-top:0">One per column, built automatically: tick-lists for text, ranges for numbers and dates.</p>
-      <div id="slicers"></div>
-      <button id="resetSlicers" type="button" style="width:100%;margin-top:8px;display:none">Reset slicers for this sheet</button>
+      <div style="margin-top:18px;">
+        <h2>Info box columns</h2>
+        <p class="help" style="margin-top:0">Fields to display on the map hover/click card for this sheet.</p>
+        <div id="infoFields"></div>
+        <button id="addField" type="button" style="width:100%;margin-top:8px">+ Add a column to the info box</button>
+      </div>
+
+      <div id="slicerSection" style="margin-top:18px;">
+        <h2>Slicers</h2>
+        <p class="help" style="margin-top:0">Filter the heat layer for this sheet.</p>
+        <div id="slicers"></div>
+        <button id="resetSlicers" type="button" style="width:100%;margin-top:8px;display:none">Reset slicers</button>
+      </div>
     </div>
   </section>
 
@@ -138,13 +145,6 @@
       </select></div>
     <button id="zoomData" type="button" style="width:100%;margin-top:10px">Zoom to data</button>
   </section>
-
-  <section>
-    <h2>Pincode info</h2>
-    <p class="help" style="margin-top:0">Click any dot on the map to see details. Choose which extra columns appear here.</p>
-    <div id="infoFields"></div>
-    <button id="addField" type="button" style="width:100%;margin-top:8px">+ Add a column to the info box</button>
-  </section>
 </aside>
 
 <main>
@@ -162,10 +162,8 @@
   <div id="card"><div class="ch"><b id="cardTitle"></b><button id="cardX" type="button" title="Close">×</button></div><div id="cardBody"></div></div>
 </main>
 
-<!-- Load Config, External Library, and App Logic -->
 <script src="config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="app.js"></script>
-
 </body>
 </html>
