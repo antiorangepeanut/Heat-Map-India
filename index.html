@@ -66,7 +66,7 @@
   #hud details{margin-top:8px}
   #hud pre{max-height:120px;overflow:auto;margin:6px 0 0;font-size:11px;color:var(--muted)}
   #empty{position:absolute;z-index:2;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:#555;text-align:center;padding:20px;font-size:14px;}
-  #card{position:absolute;z-index:7;right:12px;top:12px;width:290px;max-height:70%;overflow:auto;display:none;background:rgba(255,255,255,.97);border:1px solid #999;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.55;box-shadow:0 2px 12px rgba(0,0,0,0.15)}
+  #card{position:absolute;z-index:7;right:12px;top:12px;width:310px;max-height:70%;overflow:auto;display:none;background:rgba(255,255,255,.97);border:1px solid #999;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.55;box-shadow:0 2px 12px rgba(0,0,0,0.15)}
   #card .ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
   #card .ch b{font-size:13px}
   #card .ch button{padding:0 8px}
@@ -95,11 +95,18 @@
     <input id="dataFile" type="file" accept=".xlsx,.xls,.csv">
     <p id="dataStatus" class="note">Excel or CSV. Every sheet in an Excel file is loaded.</p>
     
-    <div id="sheetConfig" style="display:none; margin-top:12px; border-top:1px solid var(--line); padding-top:12px;">
+    <div id="pivotConfig" style="display:none; margin-top:16px; padding-top:12px; border-top:1px solid var(--line);">
+      <h2>Hover Card Pivot</h2>
+      <p class="help" style="margin-top:0">Choose the main sheet and column (like Store Name) to group your popup info.</p>
+      <div class="field"><span>Pivot Sheet</span><select id="pivotSheetSel"></select></div>
+      <div class="field"><span>Primary Column</span><select id="pivotColSel"></select></div>
+    </div>
+
+    <div id="sheetConfig" style="display:none; margin-top:16px; border-top:1px solid var(--line); padding-top:12px;">
       <div id="sheetRow" class="field" style="display:none">
-        <span>Sheet you're working on</span>
+        <span>Configure Sheet</span>
         <select id="sheetSel"></select>
-        <p class="help">The pin column, slicers, and info box apply specifically to this sheet.</p>
+        <p class="help">The pin column, slicers, and info fields apply specifically to this sheet.</p>
       </div>
       
       <div class="field"><span>Pincode column</span><select id="pinCol"></select></div>
