@@ -903,15 +903,19 @@
       if (p.x < -20 || p.x > ctx.canvas.width + 20 || p.y < -20 || p.y > ctx.canvas.height + 20) continue;
       let r;
       if (L.dots === 'ring') {
-        r = 3 + 9 * Math.sqrt(clamp(d.q / L.max, 0, 1));
+        r = (L.heat === false) ? 6 : 3 + 9 * Math.sqrt(clamp(d.q / L.max, 0, 1));
         shapePath(ctx, L.shape, p.x, p.y, r);
         ctx.lineWidth = 3.6; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
         ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgb(' + a.join(',') + ')'; ctx.stroke();
       } else {
-        r = 5;
-        const j = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1)) * 4;
+        r = (L.heat === false) ? 6 : 5;
         shapePath(ctx, L.shape, p.x, p.y, r);
-        ctx.fillStyle = 'rgb(' + ramp.lut[j] + ',' + ramp.lut[j + 1] + ',' + ramp.lut[j + 2] + ')'; ctx.fill();
+        if (L.heat === false) {
+           ctx.fillStyle = 'rgb(' + a.join(',') + ')';
+        } else {
+           const j = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1)) * 4;
+           ctx.fillStyle = 'rgb(' + ramp.lut[j] + ',' + ramp.lut[j + 1] + ',' + ramp.lut[j + 2] + ')'; 
+        }
         ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(25,25,25,.9)'; ctx.stroke();
       }
       state.hits.push({ x: p.x, y: p.y, r: Math.max(r + 2, 7), pin: d.pin });
@@ -970,6 +974,15 @@
 
   state.layers = [newLayer()];
   renderLayerUI();
+
+  // New Listener for downloading the Data Template
+  $('#dlTemplate').onclick = () => {
+    const csv = 'Sno.,Pincode,Primary,Maps Links,Rest of the info.....\n,,"(What you want your data to be centered around)","(if any)",';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = 'Heatmap_Data_Template.csv';
+    a.click();
+  };
 
   $('#addLayer').onclick = () => { state.layersTouched = true; state.layers.push(newLayer()); renderLayerUI(); refreshData(); };
   $('#addField').onclick = () => {
