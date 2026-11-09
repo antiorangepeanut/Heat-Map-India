@@ -367,6 +367,16 @@
     $('#slicers').append(wrap);
   }
 
+  function showSlicers() {
+    state.datasets.forEach(d => { if (d.slicerEl) d.slicerEl.style.display = 'none'; });
+    const a = state.active;
+    if (a) {
+      if (!a.slicerEl) buildSlicerUI(a);
+      a.slicerEl.style.display = '';
+    }
+    $('#resetSlicers').style.display = a ? '' : 'none';
+  }
+
   function setPinCol(d, col) {
     d.pinCol = col;
     d.pins = d.rows.map(r => normPin(r[col]));
@@ -410,16 +420,6 @@
       state.active.cols.forEach(c => { const o = mk('option', '', c); o.value = c; ps.append(o); });
       ps.value = state.active.pinCol;
     }
-  }
-
-  function showSlicers() {
-    state.datasets.forEach(d => { if (d.slicerEl) d.slicerEl.style.display = 'none'; });
-    const a = state.active;
-    if (a) {
-      if (!a.slicerEl) buildSlicerUI(a);
-      a.slicerEl.style.display = '';
-    }
-    $('#resetSlicers').style.display = a ? '' : 'none';
   }
 
   function ingestSheets(sheets, label) {
@@ -553,7 +553,6 @@
     const d = state.active;
     if (!d) return;
     
-    // Purge fields that no longer exist on this sheet
     d.infoFields = d.infoFields.filter(f => d.colType[f.col]);
     
     d.infoFields.forEach((f, i) => {
@@ -603,38 +602,107 @@
 
   function describe(o) {
     const lines = ['Pincode ' + o.pin];
-    const links = new Set();
 
-    // Iterate strictly through the available datasets to find user-added fields
+    // 1. Layer aggregations
+    state.layers.forEach(L => {
+      if (!L.visible) return;
+      const d = dsOf(L), g = d && o.per[d.id];
+      lines.push(labelOf(L) + ': ' + (g ? nf.format(layerCalc(L, g.idx)) : '—'));
+    });
+
+    // 2. Pivot & User-Added Info Fields 
     state.datasets.forEach(d => {
       const g = o.per[d.id];
       if (!g) return;
 
-      // Add ONLY the explicit info fields the user selected for this sheet
-      d.infoFields.forEach(f => {
-        lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
-      });
-
-      // Automatically scan for URLs in columns related to links or maps
+      const primaryCol = d.cols.find(c => c.toLowerCase() === 'primary');
       const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
-      g.idx.forEach(i => {
-        linkCols.forEach(c => {
-          const val = d.rows[i][c];
-          if (typeof val === 'string' && val.trim().startsWith('http')) {
-            links.add(val.trim());
-          }
-        });
-      });
-    });
 
-    // Generate clickable anchor tags for found URLs
-    links.forEach(url => {
-      const a = document.createElement('a');
-      a.href = url;
-      a.target = '_blank';
-      a.textContent = '📍 ' + (url.toLowerCase().includes('maps') ? 'Google Maps Link' : 'Open Link');
-      Object.assign(a.style, { display: 'block', marginTop: '6px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
-      lines.push(a);
+      if (primaryCol) {
+        // --- PIVOT MODE ---
+        const pivotGroups = new Map();
+        g.idx.forEach(i => {
+          const pVal = d.rows[i][primaryCol];
+          const key = (pVal != null && pVal !== '') ? String(pVal).trim() : '(blank)';
+          if (!pivotGroups.has(key)) pivotGroups.set(key, []);
+          pivotGroups.get(key).push(i);
+        });
+
+        pivotGroups.forEach((indices, pKey) => {
+          const block = document.createElement('div');
+          Object.assign(block.style, {
+            marginTop: '8px', padding: '8px', 
+            background: 'rgba(0,0,0,0.03)', borderRadius: '6px', 
+            border: '1px solid #eaeaea'
+          });
+
+          const title = document.createElement('div');
+          title.style.fontWeight = 'bold';
+          title.style.marginBottom = '4px';
+          title.style.fontSize = '12px';
+          title.textContent = (multi() ? d.name + ' · ' : '') + pKey;
+          block.appendChild(title);
+
+          d.infoFields.forEach(f => {
+            if (f.col === primaryCol) return; 
+            const valLine = document.createElement('div');
+            valLine.style.fontSize = '11.5px';
+            valLine.style.color = '#444';
+            valLine.textContent = f.col + ': ' + fieldValue(f, indices, d);
+            block.appendChild(valLine);
+          });
+
+          const groupLinks = new Set();
+          indices.forEach(i => {
+            linkCols.forEach(c => {
+              const val = String(d.rows[i][c] || '').trim();
+              if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
+                let cleanUrl = val;
+                if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
+                groupLinks.add(cleanUrl);
+              }
+            });
+          });
+
+          groupLinks.forEach(url => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.target = '_blank';
+            a.textContent = '📍 ' + pKey;
+            Object.assign(a.style, { display: 'block', marginTop: '6px', fontSize: '11.5px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
+            block.appendChild(a);
+          });
+
+          lines.push(block);
+        });
+
+      } else {
+        // --- STANDARD MODE (No 'Primary' column) ---
+        d.infoFields.forEach(f => {
+          lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
+        });
+
+        const links = new Set();
+        g.idx.forEach(i => {
+          linkCols.forEach(c => {
+            const val = String(d.rows[i][c] || '').trim();
+            if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
+              let cleanUrl = val;
+              if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
+              links.add(cleanUrl);
+            }
+          });
+        });
+
+        links.forEach(url => {
+          const a = document.createElement('a');
+          a.href = url;
+          a.target = '_blank';
+          a.textContent = '📍 ' + (url.toLowerCase().includes('maps') ? 'Google Maps Link' : 'Open Link');
+          Object.assign(a.style, { display: 'block', marginTop: '6px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
+          lines.push(a);
+        });
+      }
     });
 
     if (lines.length === 1) {
@@ -659,7 +727,7 @@
   }
   
   function onMouseMove(e) {
-    if (e.buttons) return; // dragging map
+    if (e.buttons) return; 
     const rect = $('#map').getBoundingClientRect();
     const hit = hitAt(e.clientX - rect.left, e.clientY - rect.top);
     setCursor(!!hit);
@@ -671,7 +739,6 @@
     $('#cardTitle').textContent = lines[0];
     const body = $('#cardBody'); body.innerHTML = '';
     
-    // Inject strings or HTML Elements (like the links)
     lines.slice(1).forEach(t => {
       if (t instanceof HTMLElement) {
         body.append(t);
