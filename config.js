@@ -1,9 +1,5 @@
-// config.js
 window.HEATMAP_CONFIG = {
-  // Replace with your active Google Maps API key
   GOOGLE_MAPS_API_KEY: "AIzaSyDllgorGZk08xTgIOR5E49EWt6BjNTq_Ss",
-  
-  // Optional: Add default file paths here if you host the CSVs on your server
-  // PINCODE_FILE: "path/to/pincodes.csv",
-  // DATA_FILE: "path/to/default_data.xlsx"
+  PINCODE_FILE: "pincodes.xlsx",
+  DATA_FILE: ""
 };
