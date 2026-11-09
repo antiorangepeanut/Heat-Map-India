@@ -426,7 +426,6 @@
             pc.append(o);
         });
         
-        // Auto-select "Primary" if available and not set
         if (!state.pivotCol || !d.cols.includes(state.pivotCol)) {
             const auto = d.cols.find(c => c.toLowerCase().trim() === 'primary');
             state.pivotCol = auto || d.cols[0];
@@ -451,7 +450,6 @@
       ps.value = state.active.pinCol;
     }
 
-    // Pivot Settings UI
     $('#pivotConfig').style.display = state.datasets.length ? 'block' : 'none';
     const pivS = $('#pivotSheetSel');
     pivS.innerHTML = '<option value="none">None (Standard List)</option>';
@@ -479,7 +477,6 @@
     state.datasets = ds; state.activeTouched = false;
     state.active = ds.find(d => d.matched > 0) || ds[0];
 
-    // Try to globally auto-detect a "Primary" column for Pivot
     let foundPivot = false;
     for (const d of ds) {
         const pColMatch = d.cols.find(c => c.toLowerCase().trim() === 'primary');
@@ -542,9 +539,14 @@
     state.layers.forEach(L => {
       let d = dsOf(L);
       if (!d && state.datasets.length) { d = state.datasets[0]; L.ds = d.id; }
-      const numCols = d ? d.numCols : [];
-      if (L.measure !== '__count' && !numCols.includes(L.measure)) L.measure = '__count';
-      const measures = [['__count', 'Row count']].concat(numCols.map(c => [c, c]));
+      
+      // Update data measures to include ALL valid columns in the dataset
+      const measures = [['__count', 'Row count']];
+      if (d) {
+         d.cols.forEach(c => measures.push([c, c]));
+      }
+
+      if (L.measure !== '__count' && (!d || !d.cols.includes(L.measure))) L.measure = '__count';
 
       const card = mk('div', 'lcard');
       const head = mk('div', 'lhead');
@@ -620,8 +622,10 @@
     
     d.infoFields.forEach((f, i) => {
       const row = mk('div', 'frow');
-      const sc = mkSelect(Object.keys(d.colType).map(c => [c, c]), f.col, v => { f.col = v; f.agg = defaultAgg(d, v); renderInfoUI(); });
-      const sa = mkSelect(AGG_OPTS[d.colType[f.col]], f.agg, v => { f.agg = v; });
+      
+      // Update options to include all columns on the sheet
+      const sc = mkSelect(d.cols.map(c => [c, c]), f.col, v => { f.col = v; f.agg = defaultAgg(d, v); renderInfoUI(); });
+      const sa = mkSelect(AGG_OPTS[d.colType[f.col] || 'cat'], f.agg, v => { f.agg = v; });
       const x = mk('button', '', '×'); x.title = 'Remove';
       x.onclick = () => { d.infoFields.splice(i, 1); renderInfoUI(); };
       
@@ -638,7 +642,9 @@
     }
     if (!vals.length) return '—';
     const nums = () => vals.filter(v => typeof v === 'number' && isFinite(v));
-    switch (f.agg) {
+    const aggType = f.agg || 'top';
+
+    switch (aggType) {
       case 'sum': { const n = nums(); return n.length ? nf.format(n.reduce((a, b) => a + b, 0)) : '—'; }
       case 'avg': { const n = nums(); return n.length ? nf.format(n.reduce((a, b) => a + b, 0) / n.length) : '—'; }
       case 'min': { const n = nums(); return n.length ? nf.format(Math.min.apply(null, n)) : '—'; }
@@ -648,7 +654,7 @@
       case 'earliest': case 'latest': {
         const t = vals.filter(v => v instanceof Date).map(v => v.getTime());
         if (!t.length) return '—';
-        return fmtDate(f.agg === 'earliest' ? Math.min.apply(null, t) : Math.max.apply(null, t));
+        return fmtDate(aggType === 'earliest' ? Math.min.apply(null, t) : Math.max.apply(null, t));
       }
       case 'list': {
         const u = [...new Set(vals.map(show))];
@@ -666,14 +672,12 @@
   function describe(o) {
     const lines = ['Pincode ' + o.pin];
 
-    // 1. Layer aggregations
     state.layers.forEach(L => {
       if (!L.visible) return;
       const d = dsOf(L), g = d && o.per[d.id];
       lines.push(labelOf(L) + ': ' + (g ? nf.format(layerCalc(L, g.idx)) : '—'));
     });
 
-    // 2. Pivot Processing (if set)
     const pSheetId = state.pivotSheet;
     const pCol = state.pivotCol;
     
@@ -742,9 +746,8 @@
       }
     }
 
-    // 3. Process Standard Info Fields for all OTHER non-pivot sheets
     state.datasets.forEach(d => {
-      if (pSheetId && d.id === pSheetId) return; // Already handled by pivot above
+      if (pSheetId && d.id === pSheetId) return; 
       
       const g = o.per[d.id];
       if (!g) return;
@@ -753,7 +756,6 @@
         lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
       });
       
-      // Standalone links for non-pivoted sheets
       const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
       const links = new Set();
       g.idx.forEach(i => {
@@ -976,7 +978,6 @@
       
       let r;
       if (L.heat === false) {
-        // Strip data-driven scaling/coloring completely when heat is hidden
         r = 6;
         shapePath(ctx, L.shape, p.x, p.y, r);
         if (L.dots === 'ring') {
@@ -1060,15 +1061,6 @@
   state.layers = [newLayer()];
   renderLayerUI();
 
-  // Button triggers download of the Template File specified in config
-  $('#dlTemplate').onclick = () => {
-    const url = CFG.TEMPLATE_FILE_URL || 'Heatmap Template.xlsx';
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = url.split('/').pop();
-    a.click();
-  };
-
   $('#addLayer').onclick = () => { state.layersTouched = true; state.layers.push(newLayer()); renderLayerUI(); refreshData(); };
   $('#addField').onclick = () => {
     const d = state.active;
@@ -1096,7 +1088,7 @@
   
   $('#pivotSheetSel').onchange = e => {
     state.pivotSheet = e.target.value === 'none' ? null : +e.target.value;
-    state.pivotCol = null; // reset to auto-detect
+    state.pivotCol = null; 
     updatePivotCols();
   };
   
