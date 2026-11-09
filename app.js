@@ -6,7 +6,8 @@
     lookup: new Map(), datasets: [], active: null, layers: [],
     points: [], pointByPin: new Map(), hits: [], pinnedPin: null,
     map: null, ov: null, canvas: null, cursor: false,
-    layersTouched: false, activeTouched: false, needFit: false
+    layersTouched: false, activeTouched: false, needFit: false,
+    pivotSheet: null, pivotCol: null
   };
   const nf = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
   const nf1 = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 1 });
@@ -407,6 +408,35 @@
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
   }
 
+  function updatePivotCols() {
+    const pc = $('#pivotColSel');
+    pc.innerHTML = '';
+    const sid = $('#pivotSheetSel').value;
+    if (sid === 'none') {
+        pc.disabled = true;
+        pc.innerHTML = '<option>--</option>';
+        state.pivotSheet = null;
+        state.pivotCol = null;
+    } else {
+        pc.disabled = false;
+        const d = dsById(+sid);
+        d.cols.forEach(c => {
+            const o = mk('option', '', c);
+            o.value = c;
+            pc.append(o);
+        });
+        
+        // Auto-select "Primary" if available and not set
+        if (!state.pivotCol || !d.cols.includes(state.pivotCol)) {
+            const auto = d.cols.find(c => c.toLowerCase().trim() === 'primary');
+            state.pivotCol = auto || d.cols[0];
+        }
+        pc.value = state.pivotCol;
+        state.pivotSheet = +sid;
+    }
+    refreshCard();
+  }
+
   function syncDataControls() {
     $('#sheetConfig').style.display = state.active ? 'block' : 'none';
     $('#sheetRow').style.display = multi() ? 'block' : 'none';
@@ -420,11 +450,27 @@
       state.active.cols.forEach(c => { const o = mk('option', '', c); o.value = c; ps.append(o); });
       ps.value = state.active.pinCol;
     }
+
+    // Pivot Settings UI
+    $('#pivotConfig').style.display = state.datasets.length ? 'block' : 'none';
+    const pivS = $('#pivotSheetSel');
+    pivS.innerHTML = '<option value="none">None (Standard List)</option>';
+    state.datasets.forEach(d => {
+        const o = mk('option', '', d.name);
+        o.value = d.id;
+        pivS.append(o);
+    });
+    if (state.pivotSheet) pivS.value = state.pivotSheet;
+    updatePivotCols();
   }
 
   function ingestSheets(sheets, label) {
     const ds = sheets.filter(s => s.rows.length).map((s, i) => {
-      const d = { id: i + 1, name: s.name, rows: s.rows, cols: Object.keys(s.rows[0]), pins: [], pinCol: null, filters: {}, numCols: [], colType: {}, groups: new Map(), unm: new Map(), kept: 0, noPin: 0, slicerEl: null, infoFields: [] };
+      const d = { 
+        id: i + 1, name: s.name, rows: s.rows, cols: Object.keys(s.rows[0]), 
+        pins: [], pinCol: null, filters: {}, numCols: [], colType: {}, 
+        groups: new Map(), unm: new Map(), kept: 0, noPin: 0, slicerEl: null, infoFields: [] 
+      };
       d.pinCol = guessPinCol(d.cols, d.rows); setPinCol(d, d.pinCol); analyze(d);
       return d;
     });
@@ -432,6 +478,23 @@
     $('#slicers').innerHTML = '';
     state.datasets = ds; state.activeTouched = false;
     state.active = ds.find(d => d.matched > 0) || ds[0];
+
+    // Try to globally auto-detect a "Primary" column for Pivot
+    let foundPivot = false;
+    for (const d of ds) {
+        const pColMatch = d.cols.find(c => c.toLowerCase().trim() === 'primary');
+        if (pColMatch) {
+            state.pivotSheet = d.id;
+            state.pivotCol = pColMatch;
+            foundPivot = true;
+            break;
+        }
+    }
+    if (!foundPivot) {
+        state.pivotSheet = null;
+        state.pivotCol = null;
+    }
+
     autoLayers(); state.needFit = true;
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
     const total = ds.reduce((a, d) => a + d.rows.length, 0);
@@ -610,23 +673,24 @@
       lines.push(labelOf(L) + ': ' + (g ? nf.format(layerCalc(L, g.idx)) : '—'));
     });
 
-    // 2. Pivot & User-Added Info Fields 
-    state.datasets.forEach(d => {
-      const g = o.per[d.id];
-      if (!g) return;
-
-      const primaryCol = d.cols.find(c => c.toLowerCase() === 'primary');
-      const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
-
-      if (primaryCol) {
-        // --- PIVOT MODE ---
+    // 2. Pivot Processing (if set)
+    const pSheetId = state.pivotSheet;
+    const pCol = state.pivotCol;
+    
+    if (pSheetId && pCol) {
+      const pd = dsById(pSheetId);
+      const pg = pd && o.per[pSheetId];
+      
+      if (pg) {
         const pivotGroups = new Map();
-        g.idx.forEach(i => {
-          const pVal = d.rows[i][primaryCol];
+        pg.idx.forEach(i => {
+          const pVal = pd.rows[i][pCol];
           const key = (pVal != null && pVal !== '') ? String(pVal).trim() : '(blank)';
           if (!pivotGroups.has(key)) pivotGroups.set(key, []);
           pivotGroups.get(key).push(i);
         });
+
+        const linkCols = pd.cols.filter(c => /link|url|map/i.test(c));
 
         pivotGroups.forEach((indices, pKey) => {
           const block = document.createElement('div');
@@ -640,22 +704,22 @@
           title.style.fontWeight = 'bold';
           title.style.marginBottom = '4px';
           title.style.fontSize = '12px';
-          title.textContent = (multi() ? d.name + ' · ' : '') + pKey;
+          title.textContent = (multi() ? pd.name + ' · ' : '') + pKey;
           block.appendChild(title);
 
-          d.infoFields.forEach(f => {
-            if (f.col === primaryCol) return; 
+          pd.infoFields.forEach(f => {
+            if (f.col === pCol) return; 
             const valLine = document.createElement('div');
             valLine.style.fontSize = '11.5px';
             valLine.style.color = '#444';
-            valLine.textContent = f.col + ': ' + fieldValue(f, indices, d);
+            valLine.textContent = f.col + ': ' + fieldValue(f, indices, pd);
             block.appendChild(valLine);
           });
 
           const groupLinks = new Set();
           indices.forEach(i => {
             linkCols.forEach(c => {
-              const val = String(d.rows[i][c] || '').trim();
+              const val = String(pd.rows[i][c] || '').trim();
               if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
                 let cleanUrl = val;
                 if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
@@ -668,41 +732,49 @@
             const a = document.createElement('a');
             a.href = url;
             a.target = '_blank';
-            a.textContent = '📍 ' + pKey;
+            a.textContent = '📍 ' + pKey; 
             Object.assign(a.style, { display: 'block', marginTop: '6px', fontSize: '11.5px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
             block.appendChild(a);
           });
 
           lines.push(block);
         });
-
-      } else {
-        // --- STANDARD MODE (No 'Primary' column) ---
-        d.infoFields.forEach(f => {
-          lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
-        });
-
-        const links = new Set();
-        g.idx.forEach(i => {
-          linkCols.forEach(c => {
-            const val = String(d.rows[i][c] || '').trim();
-            if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
-              let cleanUrl = val;
-              if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
-              links.add(cleanUrl);
-            }
-          });
-        });
-
-        links.forEach(url => {
-          const a = document.createElement('a');
-          a.href = url;
-          a.target = '_blank';
-          a.textContent = '📍 ' + (url.toLowerCase().includes('maps') ? 'Google Maps Link' : 'Open Link');
-          Object.assign(a.style, { display: 'block', marginTop: '6px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
-          lines.push(a);
-        });
       }
+    }
+
+    // 3. Process Standard Info Fields for all OTHER non-pivot sheets
+    state.datasets.forEach(d => {
+      if (pSheetId && d.id === pSheetId) return; // Already handled by pivot above
+      
+      const g = o.per[d.id];
+      if (!g) return;
+
+      d.infoFields.forEach(f => {
+        lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
+      });
+      
+      // Standalone links for non-pivoted sheets
+      const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
+      const links = new Set();
+      g.idx.forEach(i => {
+        linkCols.forEach(c => {
+          const val = String(d.rows[i][c] || '').trim();
+          if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
+            let cleanUrl = val;
+            if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
+            links.add(cleanUrl);
+          }
+        });
+      });
+
+      links.forEach(url => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.textContent = '📍 ' + (url.toLowerCase().includes('maps') ? 'Google Maps Link' : 'Open Link');
+        Object.assign(a.style, { display: 'block', marginTop: '6px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
+        lines.push(a);
+      });
     });
 
     if (lines.length === 1) {
@@ -897,26 +969,39 @@
   }
 
   function drawDots(ctx, L, toPx) {
-    const ramp = RAMPS[L.ramp], a = ramp.accent;
+    const ramp = RAMPS[L.ramp];
     for (const d of L.pts) {
       const p = toPx(d); if (!p) continue;
       if (p.x < -20 || p.x > ctx.canvas.width + 20 || p.y < -20 || p.y > ctx.canvas.height + 20) continue;
+      
       let r;
-      if (L.dots === 'ring') {
-        r = (L.heat === false) ? 6 : 3 + 9 * Math.sqrt(clamp(d.q / L.max, 0, 1));
+      if (L.heat === false) {
+        // Strip data-driven scaling/coloring completely when heat is hidden
+        r = 6;
         shapePath(ctx, L.shape, p.x, p.y, r);
-        ctx.lineWidth = 3.6; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
-        ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgb(' + a.join(',') + ')'; ctx.stroke();
-      } else {
-        r = (L.heat === false) ? 6 : 5;
-        shapePath(ctx, L.shape, p.x, p.y, r);
-        if (L.heat === false) {
-           ctx.fillStyle = 'rgb(' + a.join(',') + ')';
+        if (L.dots === 'ring') {
+            ctx.lineWidth = 4.0; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
+            ctx.lineWidth = 2.5; ctx.strokeStyle = '#1f78e0'; ctx.stroke(); 
         } else {
-           const j = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1)) * 4;
-           ctx.fillStyle = 'rgb(' + ramp.lut[j] + ',' + ramp.lut[j + 1] + ',' + ramp.lut[j + 2] + ')'; 
+            ctx.fillStyle = '#111'; 
+            ctx.fill();
+            ctx.lineWidth = 1.6; ctx.strokeStyle = '#fff'; ctx.stroke(); 
         }
-        ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(25,25,25,.9)'; ctx.stroke();
+      } 
+      else {
+        if (L.dots === 'ring') {
+            r = 3 + 9 * Math.sqrt(clamp(d.q / L.max, 0, 1));
+            shapePath(ctx, L.shape, p.x, p.y, r);
+            ctx.lineWidth = 3.6; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
+            ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgb(' + ramp.accent.join(',') + ')'; ctx.stroke();
+        } else {
+            r = 5;
+            const j = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1)) * 4;
+            shapePath(ctx, L.shape, p.x, p.y, r);
+            ctx.fillStyle = 'rgb(' + ramp.lut[j] + ',' + ramp.lut[j + 1] + ',' + ramp.lut[j + 2] + ')'; 
+            ctx.fill();
+            ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(25,25,25,.9)'; ctx.stroke();
+        }
       }
       state.hits.push({ x: p.x, y: p.y, r: Math.max(r + 2, 7), pin: d.pin });
     }
@@ -975,12 +1060,12 @@
   state.layers = [newLayer()];
   renderLayerUI();
 
-  // New Listener for downloading the Data Template
+  // Button triggers download of the Template File specified in config
   $('#dlTemplate').onclick = () => {
-    const csv = 'Sno.,Pincode,Primary,Maps Links,Rest of the info.....\n,,"(What you want your data to be centered around)","(if any)",';
+    const url = CFG.TEMPLATE_FILE_URL || 'Heatmap Template.xlsx';
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = 'Heatmap_Data_Template.csv';
+    a.href = url;
+    a.download = url.split('/').pop();
     a.click();
   };
 
@@ -1003,10 +1088,23 @@
     catch (err) { setStatus('#lookupStatus', err.message, 'err'); }
   };
   $('#dataFile').onchange = e => { const f = e.target.files[0]; if (f) loadData(f); };
+  
   $('#sheetSel').onchange = e => {
     state.active = dsById(+e.target.value); state.activeTouched = true;
     syncDataControls(); showSlicers(); renderInfoUI();
   };
+  
+  $('#pivotSheetSel').onchange = e => {
+    state.pivotSheet = e.target.value === 'none' ? null : +e.target.value;
+    state.pivotCol = null; // reset to auto-detect
+    updatePivotCols();
+  };
+  
+  $('#pivotColSel').onchange = e => {
+    state.pivotCol = e.target.value;
+    refreshCard();
+  };
+  
   $('#pinCol').onchange = e => {
     const d = state.active; if (!d) return;
     d.pinManual = true;
