@@ -148,7 +148,7 @@
   </nav>
 
   <div class="tab-body">
-    <!-- TAB 1: DATA & PIVOT CONFIG -->
+    <!-- TAB 1: DATA CONFIG -->
     <div id="tabData" class="tab-pane active">
       <section>
         <h2>Upload Dataset</h2>
@@ -157,6 +157,7 @@
           <span id="dataStatus" class="note">Every sheet in an Excel workbook is loaded.</span>
           <input id="dataFile" type="file" accept=".xlsx,.xls,.csv">
         </label>
+        <button id="dlTemplate" type="button" style="width:100%;margin-top:8px;font-size:12px">📥 Download Sample Excel Template</button>
 
         <div id="sheetConfig" style="display:none; margin-top:14px; border-top:1px solid var(--line); padding-top:12px;">
           <div id="sheetRow" class="field" style="display:none">
@@ -166,14 +167,6 @@
           <div class="field">
             <span>Pincode Column</span>
             <select id="pinCol"></select>
-          </div>
-          <div class="field" style="margin-top:12px;">
-            <span>Primary Column (Pivot / Group By)</span>
-            <div id="pivotSheetRow" style="display:none; margin-bottom:6px;">
-              <select id="pivotSheetSel"></select>
-            </div>
-            <select id="pivotColSel"></select>
-            <p class="help">All popup card details will group and pivot around this primary column (e.g., Store Name, Dealer, SKU).</p>
           </div>
         </div>
       </section>
