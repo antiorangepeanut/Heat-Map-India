@@ -1066,17 +1066,12 @@
 
   // Download Sample Template Button Handler
   $('#dlTemplate').onclick = () => {
-    const wsData = [
-      ["Pincode", "Primary", "Sales", "Category"],
-      [400001, "Store Alpha", 15000, "Electronics"],
-      [400001, "Store Beta", 8200, "Home Appliances"],
-      [400050, "Store Gamma", 24000, "Electronics"],
-      [110001, "Store Delta", 19500, "Kitchen"]
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-    XLSX.writeFile(wb, "pincode_template.xlsx");
+    const a = document.createElement('a');
+    a.href = 'pincode_template.xlsx'; // Ensure this matches the exact filename in your GitHub repo
+    a.download = 'pincode_template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   $('#loadMap').onclick = startMap;
