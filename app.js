@@ -460,29 +460,6 @@
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
   }
 
-  function updatePivotCols() {
-    const pc = $('#pivotColSel');
-    pc.innerHTML = '';
-    const sid = $('#pivotSheetSel').value;
-    if (sid === 'none') {
-      pc.disabled = true;
-      pc.innerHTML = '<option>--</option>';
-      state.pivotSheet = null;
-      state.pivotCol = null;
-    } else {
-      pc.disabled = false;
-      const d = dsById(+sid);
-      d.cols.forEach(c => { const o = mk('option', '', c); o.value = c; pc.append(o); });
-      if (!state.pivotCol || !d.cols.includes(state.pivotCol)) {
-        const auto = d.cols.find(c => /primary|store|dealer|shop|name/i.test(c));
-        state.pivotCol = auto || d.cols[0];
-      }
-      pc.value = state.pivotCol;
-      state.pivotSheet = +sid;
-    }
-    refreshCard();
-  }
-
   function syncDataControls() {
     const hasData = state.datasets.length > 0;
     $('#sheetConfig').style.display = hasData ? 'block' : 'none';
@@ -499,17 +476,6 @@
       ps.value = state.active.pinCol;
     }
 
-    // Pivot Sheet & Col selectors in Data tab
-    const pivotSheetRow = $('#pivotSheetRow');
-    pivotSheetRow.style.display = multi() ? 'block' : 'none';
-    const pivS = $('#pivotSheetSel');
-    pivS.innerHTML = '';
-    state.datasets.forEach(d => { const o = mk('option', '', d.name); o.value = d.id; pivS.append(o); });
-    if (state.pivotSheet) pivS.value = state.pivotSheet;
-    else if (state.datasets.length) { state.pivotSheet = state.datasets[0].id; pivS.value = state.pivotSheet; }
-    updatePivotCols();
-
-    // Filter Sheet selector in Filters tab
     const filterSheetRow = $('#filterSheetRow');
     filterSheetRow.style.display = multi() ? 'block' : 'none';
     const filtS = $('#filterSheetSel');
@@ -537,8 +503,9 @@
     state.filterSheetId = state.active.id;
 
     state.pivotSheet = ds[0].id;
+    state.pivotCol = null;
     for (const d of ds) {
-      const pColMatch = d.cols.find(c => c.toLowerCase().trim() === 'primary');
+      const pColMatch = d.cols.find(c => /primary|store|dealer|shop|name/i.test(c));
       if (pColMatch) { state.pivotSheet = d.id; state.pivotCol = pColMatch; break; }
     }
     if (!state.pivotCol && ds[0].cols.length) state.pivotCol = ds[0].cols[0];
@@ -729,11 +696,6 @@
 
   function describe(o) {
     const lines = ['Pincode ' + o.pin];
-    state.layers.forEach(L => {
-      if (!L.visible) return;
-      const d = dsOf(L), g = d && o.per[d.id];
-      lines.push(labelOf(L) + ': ' + (g ? nf.format(layerCalc(L, g.idx)) : '—'));
-    });
 
     const pSheetId = state.pivotSheet, pCol = state.pivotCol;
     if (pSheetId && pCol) {
@@ -746,7 +708,6 @@
           if (!pivotGroups.has(key)) pivotGroups.set(key, []);
           pivotGroups.get(key).push(i);
         });
-        const linkCols = pd.cols.filter(c => /link|url|map/i.test(c));
         pivotGroups.forEach((indices, pKey) => {
           const block = mk('div');
           Object.assign(block.style, {
@@ -764,22 +725,6 @@
             Object.assign(valLine.style, { fontSize: '11.5px', color: 'var(--muted)' });
             block.appendChild(valLine);
           });
-
-          const groupLinks = new Set();
-          indices.forEach(i => {
-            linkCols.forEach(c => {
-              const val = String(pd.rows[i][c] || '').trim();
-              if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
-                groupLinks.add(/^https?:\/\//i.test(val) ? val : 'https://' + val);
-              }
-            });
-          });
-          groupLinks.forEach(url => {
-            const a = mk('a', '', '📍 ' + pKey);
-            a.href = url; a.target = '_blank'; a.rel = 'noopener';
-            Object.assign(a.style, { display: 'block', marginTop: '5px', fontSize: '11.5px', color: 'var(--accent)', textDecoration: 'none', fontWeight: '600' });
-            block.appendChild(a);
-          });
           lines.push(block);
         });
       }
@@ -791,22 +736,6 @@
       if (!g) return;
       d.infoFields.forEach(f => {
         lines.push((multi() ? d.name + ' · ' : '') + f.col + ' (' + aggLabel(f, d) + '): ' + fieldValue(f, g.idx, d));
-      });
-      const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
-      const links = new Set();
-      g.idx.forEach(i => {
-        linkCols.forEach(c => {
-          const val = String(d.rows[i][c] || '').trim();
-          if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
-            links.add(/^https?:\/\//i.test(val) ? val : 'https://' + val);
-          }
-        });
-      });
-      links.forEach(url => {
-        const a = mk('a', '', '📍 ' + (url.toLowerCase().includes('maps') ? 'Open in Google Maps' : 'Open Link'));
-        a.href = url; a.target = '_blank'; a.rel = 'noopener';
-        Object.assign(a.style, { display: 'block', marginTop: '6px', color: 'var(--accent)', textDecoration: 'none', fontWeight: '600' });
-        lines.push(a);
       });
     });
 
@@ -1135,6 +1064,21 @@
     refreshCard();
   };
 
+  // Download Sample Template Button Handler
+  $('#dlTemplate').onclick = () => {
+    const wsData = [
+      ["Pincode", "Primary", "Sales", "Category"],
+      [400001, "Store Alpha", 15000, "Electronics"],
+      [400001, "Store Beta", 8200, "Home Appliances"],
+      [400050, "Store Gamma", 24000, "Electronics"],
+      [110001, "Store Delta", 19500, "Kitchen"]
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    XLSX.writeFile(wb, "pincode_template.xlsx");
+  };
+
   $('#loadMap').onclick = startMap;
   $('#key').addEventListener('keydown', e => { if (e.key === 'Enter') startMap(); });
   $('#lookupFile').onchange = async e => {
@@ -1149,12 +1093,6 @@
     state.active = dsById(+e.target.value); state.activeTouched = true;
     syncDataControls(); showSlicers(); renderInfoUI();
   };
-  $('#pivotSheetSel').onchange = e => {
-    state.pivotSheet = e.target.value === 'none' ? null : +e.target.value;
-    state.pivotCol = null;
-    updatePivotCols();
-  };
-  $('#pivotColSel').onchange = e => { state.pivotCol = e.target.value; refreshCard(); };
   $('#filterSheetSel').onchange = e => {
     state.filterSheetId = +e.target.value;
     showSlicers();
