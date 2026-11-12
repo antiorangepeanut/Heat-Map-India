@@ -1064,14 +1064,25 @@
     refreshCard();
   };
 
-  // Download Sample Template Button Handler
-  $('#dlTemplate').onclick = () => {
-    const a = document.createElement('a');
-    a.href = 'pincode_template.xlsx'; // Ensure this matches the exact filename in your GitHub repo
-    a.download = 'pincode_template.xlsx';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  // Download Sample Template Button Handler: serves the static pincode_template.xlsx (no generated data)
+  $('#dlTemplate').onclick = async () => {
+    const save = href => {
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = 'pincode_template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    };
+    try {
+      const r = await fetch('pincode_template.xlsx', { cache: 'no-cache' });
+      if (!r.ok) throw new Error(r.status);
+      const url = URL.createObjectURL(await r.blob());
+      save(url);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      save('pincode_template.xlsx'); // fallback (e.g. opened via file://)
+    }
   };
 
   $('#loadMap').onclick = startMap;
