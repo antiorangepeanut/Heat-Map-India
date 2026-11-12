@@ -9,7 +9,7 @@
     points: [], pointByPin: new Map(), hits: [], pinnedPin: null,
     map: null, ov: null, canvas: null, cursor: false,
     layersTouched: false, activeTouched: false, needFit: false,
-    pivotSheet: null, pivotCol: null,
+    pivotSheet: null, pivotCol: null, filterSheetId: null,
     mapOk: false, lookupOk: false,
     stampCanvas: null, stampRadius: 0
   };
@@ -264,9 +264,7 @@
     }
     const m = new Map();
     state.latLngCache.clear();
-    acc.forEach((o, p) => {
-      m.set(p, [o.a / o.n, o.b / o.n]);
-    });
+    acc.forEach((o, p) => { m.set(p, [o.a / o.n, o.b / o.n]); });
     if (!m.size) throw new Error('No valid India pincodes found.');
     return m;
   }
@@ -347,9 +345,9 @@
 
   function updateFilterBadge() {
     let cnt = 0;
-    if (state.active) {
-      Object.values(state.active.filters).forEach(f => { if (isActive(f)) cnt++; });
-    }
+    state.datasets.forEach(d => {
+      Object.values(d.filters).forEach(f => { if (isActive(f)) cnt++; });
+    });
     const b = $('#filterBadge');
     b.textContent = cnt;
     b.classList.toggle('on', cnt > 0);
@@ -421,12 +419,13 @@
 
   function showSlicers() {
     state.datasets.forEach(d => { if (d.slicerEl) d.slicerEl.style.display = 'none'; });
-    const a = state.active;
-    if (a) {
-      if (!a.slicerEl) buildSlicerUI(a);
-      else { $('#slicers').innerHTML = ''; $('#slicers').append(a.slicerEl); a.slicerEl.style.display = ''; }
+    const fId = state.filterSheetId || (state.active ? state.active.id : null);
+    const d = dsById(fId) || state.active;
+    if (d) {
+      if (!d.slicerEl) buildSlicerUI(d);
+      else { $('#slicers').innerHTML = ''; $('#slicers').append(d.slicerEl); d.slicerEl.style.display = ''; }
     }
-    $('#resetSlicers').style.display = a ? '' : 'none';
+    $('#resetSlicers').style.display = d ? '' : 'none';
     updateFilterBadge();
   }
 
@@ -456,6 +455,7 @@
     });
     const good = state.datasets.find(d => d.matched > 0);
     if (!state.activeTouched && good) state.active = good;
+    if (!state.filterSheetId && state.active) state.filterSheetId = state.active.id;
     if (!state.layersTouched) autoLayers();
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
   }
@@ -484,7 +484,7 @@
   }
 
   function syncDataControls() {
-    const hasData = !!state.active;
+    const hasData = state.datasets.length > 0;
     $('#sheetConfig').style.display = hasData ? 'block' : 'none';
     $('#popupSection').style.display = hasData ? 'block' : 'none';
     $('#sheetRow').style.display = multi() ? 'block' : 'none';
@@ -499,11 +499,26 @@
       ps.value = state.active.pinCol;
     }
 
+    // Pivot Sheet & Col selectors in Data tab
+    const pivotSheetRow = $('#pivotSheetRow');
+    pivotSheetRow.style.display = multi() ? 'block' : 'none';
     const pivS = $('#pivotSheetSel');
-    pivS.innerHTML = '<option value="none">None (Standard Summary)</option>';
+    pivS.innerHTML = '';
     state.datasets.forEach(d => { const o = mk('option', '', d.name); o.value = d.id; pivS.append(o); });
     if (state.pivotSheet) pivS.value = state.pivotSheet;
+    else if (state.datasets.length) { state.pivotSheet = state.datasets[0].id; pivS.value = state.pivotSheet; }
     updatePivotCols();
+
+    // Filter Sheet selector in Filters tab
+    const filterSheetRow = $('#filterSheetRow');
+    filterSheetRow.style.display = multi() ? 'block' : 'none';
+    const filtS = $('#filterSheetSel');
+    filtS.innerHTML = '';
+    state.datasets.forEach(d => { const o = mk('option', '', d.name); o.value = d.id; filtS.append(o); });
+    if (!state.filterSheetId && state.active) state.filterSheetId = state.active.id;
+    if (state.filterSheetId) filtS.value = state.filterSheetId;
+
+    showSlicers();
   }
 
   function ingestSheets(sheets) {
@@ -519,12 +534,14 @@
     if (!ds.length) throw new Error('No sheet with rows found.');
     state.datasets = ds; state.activeTouched = false;
     state.active = ds.find(d => d.matched > 0) || ds[0];
+    state.filterSheetId = state.active.id;
 
-    state.pivotSheet = null; state.pivotCol = null;
+    state.pivotSheet = ds[0].id;
     for (const d of ds) {
       const pColMatch = d.cols.find(c => c.toLowerCase().trim() === 'primary');
       if (pColMatch) { state.pivotSheet = d.id; state.pivotCol = pColMatch; break; }
     }
+    if (!state.pivotCol && ds[0].cols.length) state.pivotCol = ds[0].cols[0];
 
     autoLayers(); state.needFit = true;
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
@@ -620,7 +637,6 @@
       const colorField = mkField('Color Palette', sp); colorField.append(swatch);
       card.append(colorField);
 
-      // Quick Pill Toggles for Heat & Dots
       const pills = mk('div', 'pills');
       const heatLbl = mk('label', 'pill-toggle');
       const heatCb = mk('input'); heatCb.type = 'checkbox'; heatCb.checked = L.heat !== false;
@@ -634,7 +650,6 @@
       pills.append(heatLbl, dotLbl);
       card.append(pills);
 
-      // Collapsible Advanced Settings
       const adv = mk('details', 'plain');
       adv.append(mk('summary', '', 'Advanced layer options'));
       const ss = mkSelect([['linear', 'Linear'], ['sqrt', 'Square root'], ['log', 'Logarithmic']], L.scale, v => { L.scale = v; restyle(); });
@@ -795,7 +810,7 @@
       });
     });
 
-    if (lines.length === 1) lines.push('Click "+ Add column to popup card" in Tab 1 to show more details.');
+    if (lines.length === 1) lines.push('Click "+ Add metric column" in Tab 1 to show details.');
     return lines;
   }
 
@@ -938,7 +953,6 @@
     });
   }
 
-  // Pre-rendered radial stamp for fast canvas drawing
   function getStamp() {
     if (!state.stampCanvas) {
       const sc = document.createElement('canvas');
@@ -1102,7 +1116,6 @@
   state.layers = [newLayer()];
   renderLayerUI();
 
-  // Drag and drop events
   const dz = $('#dropzone');
   ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
   ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
@@ -1142,6 +1155,10 @@
     updatePivotCols();
   };
   $('#pivotColSel').onchange = e => { state.pivotCol = e.target.value; refreshCard(); };
+  $('#filterSheetSel').onchange = e => {
+    state.filterSheetId = +e.target.value;
+    showSlicers();
+  };
   $('#pinCol').onchange = e => {
     const d = state.active; if (!d) return;
     d.pinManual = true;
@@ -1159,7 +1176,8 @@
   $('#pinJump').addEventListener('keydown', e => { if (e.key === 'Enter') jumpToPincode(); });
 
   $('#resetSlicers').onclick = () => {
-    const d = state.active; if (!d) return;
+    const fId = state.filterSheetId || (state.active ? state.active.id : null);
+    const d = dsById(fId); if (!d) return;
     analyze(d); buildSlicerUI(d); showSlicers(); renderLayerUI(); renderInfoUI(); refreshData();
   };
   $('#dlUnm').onclick = () => {
