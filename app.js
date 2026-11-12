@@ -1,13 +1,17 @@
 // app.js
 (function () {
   const $ = s => document.querySelector(s);
+  const $$ = s => document.querySelectorAll(s);
   const CFG = window.HEATMAP_CONFIG || {};
   const state = {
-    lookup: new Map(), datasets: [], active: null, layers: [],
+    lookup: new Map(), latLngCache: new Map(),
+    datasets: [], active: null, layers: [],
     points: [], pointByPin: new Map(), hits: [], pinnedPin: null,
     map: null, ov: null, canvas: null, cursor: false,
     layersTouched: false, activeTouched: false, needFit: false,
-    pivotSheet: null, pivotCol: null
+    pivotSheet: null, pivotCol: null,
+    mapOk: false, lookupOk: false,
+    stampCanvas: null, stampRadius: 0
   };
   const nf = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
   const nf1 = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 1 });
@@ -15,6 +19,30 @@
   const dsById = id => state.datasets.find(d => d.id === id) || null;
   const dsOf = L => dsById(L.ds);
   const multi = () => state.datasets.length > 1;
+
+  // Tab switching
+  $$('.tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      $$('.tab-btn').forEach(b => b.classList.remove('active'));
+      $$('.tab-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      $('#' + btn.dataset.tab).classList.add('active');
+    };
+  });
+
+  // Setup status pill toggle
+  $('#statusPill').onclick = () => $('#setupDrawer').classList.toggle('open');
+  function updateSetupPill() {
+    const pill = $('#statusPill'), drawer = $('#setupDrawer');
+    if (state.mapOk && state.lookupOk) {
+      pill.textContent = '● Ready (' + state.lookup.size.toLocaleString() + ' pins)';
+      pill.className = 'ok';
+      drawer.classList.remove('open');
+    } else {
+      pill.textContent = '⚠ Setup Required';
+      pill.className = 'err';
+    }
+  }
 
   function buildRamp(name, stops) {
     const lut = new Uint8ClampedArray(1024);
@@ -32,23 +60,23 @@
       accent: stops[stops.length - 1][1].slice(0, 3)
     };
   }
-  
+
   function fromColours(name, cols) {
     const n = cols.length, stops = [[0, cols[0].concat(0)], [0.15, cols[0].concat(0.8)]];
     for (let i = 1; i < n; i++) stops.push([0.35 + 0.65 * (i - 1) / (n - 2), cols[i].concat(1)]);
     return buildRamp(name, stops);
   }
-  
+
   const RAMPS = {
-    orig:    buildRamp('Classic (blue → green → yellow → red)', [[0, [43,131,186,0]], [.15, [43,131,186,.8]], [.35, [171,221,164,1]], [.55, [255,255,191,1]], [.78, [253,174,97,1]], [1, [215,25,28,1]]]),
-    cool:    buildRamp('Cool (cyan → navy)', [[0, [0,214,255,0]], [.15, [0,214,255,.85]], [.5, [31,120,224,1]], [1, [27,20,100,1]]]),
-    warm:    buildRamp('Warm (yellow → dark red)', [[0, [255,214,0,0]], [.15, [255,214,0,.85]], [.5, [255,122,0,1]], [1, [164,0,31,1]]]),
+    orig:    buildRamp('Classic (Blue → Green → Yellow → Red)', [[0, [43,131,186,0]], [.15, [43,131,186,.8]], [.35, [171,221,164,1]], [.55, [255,255,191,1]], [.78, [253,174,97,1]], [1, [215,25,28,1]]]),
+    warm:    buildRamp('Neon Gold → Crimson', [[0, [255,214,0,0]], [.15, [255,214,0,.85]], [.5, [255,122,0,1]], [1, [210,0,40,1]]]),
+    cool:    buildRamp('Cyan → Electric Blue', [[0, [0,214,255,0]], [.15, [0,214,255,.85]], [.5, [31,120,224,1]], [1, [27,20,100,1]]]),
     purples: fromColours('Purples', [[158,154,200], [117,107,177], [84,39,143], [63,0,125]]),
-    greens:  fromColours('Greens', [[116,196,118], [49,163,84], [0,109,44], [0,68,27]]),
+    greens:  fromColours('Emeralds', [[116,196,118], [49,163,84], [0,109,44], [0,68,27]]),
     magma:   fromColours('Magma', [[254,176,120], [241,96,93], [183,55,121], [114,31,129], [44,17,95]]),
     reds:    fromColours('Reds', [[252,174,145], [251,106,74], [222,45,38], [165,15,21]])
   };
-  const NEXT_RAMPS = ['orig', 'cool', 'warm', 'purples', 'greens', 'magma', 'reds'];
+  const NEXT_RAMPS = ['warm', 'cool', 'orig', 'purples', 'greens', 'magma', 'reds'];
   const SHAPES = ['circle', 'square', 'diamond', 'triangle'];
   const SHAPE_ICON = { circle: '●', square: '■', diamond: '◆', triangle: '▲' };
 
@@ -58,7 +86,7 @@
     if (scl === 'log') return Math.log(1 + q) / Math.log(1 + mx);
     return q / mx;
   }
-  
+
   function unnorm(t, scl, mx) {
     if (scl === 'sqrt') return t * t * mx;
     if (scl === 'log') return Math.exp(t * Math.log(1 + mx)) - 1;
@@ -68,13 +96,13 @@
   const STYLES = {
     gray: [{ featureType: 'poi', stylers: [{ visibility: 'off' }] }, { stylers: [{ saturation: -85 }, { lightness: 20 }] }],
     dark: [
-      { elementType: 'geometry', stylers: [{ color: '#212121' }] },
-      { elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
-      { elementType: 'labels.text.stroke', stylers: [{ color: '#212121' }] },
-      { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0e1626' }] },
-      { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2c2c2c' }] },
+      { elementType: 'geometry', stylers: [{ color: '#1d2026' }] },
+      { elementType: 'labels.text.fill', stylers: [{ color: '#8c939e' }] },
+      { elementType: 'labels.text.stroke', stylers: [{ color: '#161920' }] },
+      { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0d1117' }] },
+      { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2b303c' }] },
       { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-      { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#555555' }] }
+      { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#454c59' }] }
     ]
   };
 
@@ -82,8 +110,9 @@
   const nextFrame = f => window.requestAnimationFrame ? window.requestAnimationFrame(f) : setTimeout(f, 16);
   const setStatus = (sel, msg, kind) => {
     const e = $(sel);
+    if (!e) return;
     e.textContent = (kind === 'ok' ? '✓ ' : kind === 'err' ? '✗ ' : '') + msg;
-    e.className = kind || '';
+    e.className = 'note ' + (kind || '');
   };
   const keyOf = v => (v == null || v === '') ? '(blank)' : String(v);
   const pad = n => String(n).padStart(2, '0');
@@ -159,12 +188,16 @@
   function loadMapsScript(key) {
     return new Promise((res, rej) => {
       if (window.google && google.maps && google.maps.Map) return res();
-      window.gm_authFailure = () => setStatus('#mapStatus', 'Google rejected the key.', 'err');
+      window.gm_authFailure = () => {
+        state.mapOk = false; updateSetupPill();
+        setStatus('#mapStatus', 'Google rejected the API key.', 'err');
+        $('#setupDrawer').classList.add('open');
+      };
       const s = document.createElement('script');
       s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&v=weekly';
       s.async = true;
       s.onload = () => res();
-      s.onerror = () => rej(new Error('Could not reach Google Maps. Check your internet connection.'));
+      s.onerror = () => rej(new Error('Could not reach Google Maps.'));
       document.head.appendChild(s);
     });
   }
@@ -178,30 +211,32 @@
 
   async function startMap() {
     const key = $('#key').value.trim();
-    if (!key) return setStatus('#mapStatus', 'No API key.', 'err');
+    if (!key) { state.mapOk = false; updateSetupPill(); return setStatus('#mapStatus', 'No API key.', 'err'); }
     setStatus('#mapStatus', 'Loading map…');
-    try { await loadMapsScript(key); } catch (e) { return setStatus('#mapStatus', e.message, 'err'); }
+    try { await loadMapsScript(key); } catch (e) { state.mapOk = false; updateSetupPill(); return setStatus('#mapStatus', e.message, 'err'); }
     if (!state.map) {
       const mapDiv = $('#map');
       state.map = new google.maps.Map(mapDiv, {
-        center: { lat: 22.5, lng: 79 }, zoom: 5, minZoom: 3,
+        center: { lat: 19.076, lng: 72.8777 }, zoom: 10, minZoom: 3,
         streetViewControl: false, mapTypeControl: false, fullscreenControl: true, clickableIcons: false
       });
       const ov = new google.maps.OverlayView();
       ov.onAdd = function () {}; ov.onRemove = function () {}; ov.draw = scheduleRender;
       ov.setMap(state.map); state.ov = ov;
-      
+
       const cv = document.createElement('canvas');
       Object.assign(cv.style, { position: 'absolute', left: '0', top: '0', pointerEvents: 'none', zIndex: '1' });
       mapDiv.appendChild(cv); state.canvas = cv;
-      
+
       ['bounds_changed', 'zoom_changed', 'idle'].forEach(e => state.map.addListener(e, scheduleRender));
       state.map.addListener('click', onMapClick);
       mapDiv.addEventListener('mousemove', onMouseMove);
-      
+
       applyBasemap();
     }
+    state.mapOk = true;
     setStatus('#mapStatus', 'Map ready.', 'ok');
+    updateSetupPill();
     if (state.needFit && state.points.length) { state.needFit = false; fitToData(); }
     render();
   }
@@ -218,7 +253,7 @@
     const pc = cols.find(c => /pin|postal|zip/i.test(c));
     const la = cols.find(c => /^lat/i.test(c));
     const lo = cols.find(c => /^(lon|lng|long)/i.test(c));
-    if (!pc || !la || !lo) throw new Error('Could not find Pincode / Latitude / Longitude columns.');
+    if (!pc || !la || !lo) throw new Error('Missing Pincode / Latitude / Longitude columns.');
     const acc = new Map();
     for (const r of rows) {
       const p = normPin(r[pc]); const a = parseFloat(r[la]); const b = parseFloat(r[lo]);
@@ -228,13 +263,18 @@
       o.a += a; o.b += b; o.n++; acc.set(p, o);
     }
     const m = new Map();
-    acc.forEach((o, p) => m.set(p, [o.a / o.n, o.b / o.n]));
-    if (!m.size) throw new Error('No valid pincodes with coordinates inside India were found.');
+    state.latLngCache.clear();
+    acc.forEach((o, p) => {
+      m.set(p, [o.a / o.n, o.b / o.n]);
+    });
+    if (!m.size) throw new Error('No valid India pincodes found.');
     return m;
   }
-  
-  function lookupReady(label) {
+
+  function lookupReady() {
+    state.lookupOk = true;
     setStatus('#lookupStatus', state.lookup.size.toLocaleString() + ' pincodes loaded.', 'ok');
+    updateSetupPill();
     reguessAll();
     refreshData();
   }
@@ -292,7 +332,7 @@
       else if (info.type === 'num') f = { type: 'num', min: info.min, max: info.max, lo: info.min, hi: info.max };
       else if (info.type === 'date') { f = { type: 'date', lo: sod(info.min), hi: eod(info.max), dmin: info.min, dmax: info.max }; f.lo0 = f.lo; f.hi0 = f.hi; }
       else f = { type: 'text', q: '' };
-      f.tag = { cat: 'list', num: 'range', date: 'dates', text: 'contains' }[info.type];
+      f.tag = { cat: 'list', num: 'range', date: 'dates', text: 'text' }[info.type];
       d.filters[col] = f;
     }
   }
@@ -305,8 +345,18 @@
     return false;
   }
 
+  function updateFilterBadge() {
+    let cnt = 0;
+    if (state.active) {
+      Object.values(state.active.filters).forEach(f => { if (isActive(f)) cnt++; });
+    }
+    const b = $('#filterBadge');
+    b.textContent = cnt;
+    b.classList.toggle('on', cnt > 0);
+  }
+
   function buildCat(f, body) {
-    body.innerHTML = '<input type="search" class="q" placeholder="Search…"><div class="btns"><button type="button" data-a="all">All</button><button type="button" data-a="none">None</button><span class="cnt"></span></div><div class="list"></div>';
+    body.innerHTML = '<input type="search" class="q" placeholder="Filter values…"><div class="btns"><button type="button" data-a="all">Select All</button><button type="button" data-a="none">Clear</button><span class="cnt"></span></div><div class="list"></div>';
     const list = body.querySelector('.list'), q = body.querySelector('.q'), cnt = body.querySelector('.cnt');
     const items = f.all.map(v => {
       const lab = document.createElement('label'), cb = document.createElement('input');
@@ -314,7 +364,7 @@
       lab.append(cb, document.createTextNode(v)); list.append(lab);
       return { lab, cb, v };
     });
-    const upd = () => { cnt.textContent = f.sel.size + '/' + f.all.length; };
+    const upd = () => { cnt.textContent = f.sel.size + ' / ' + f.all.length; };
     list.addEventListener('change', e => {
       if (e.target.type !== 'checkbox') return;
       e.target.checked ? f.sel.add(e.target.value) : f.sel.delete(e.target.value);
@@ -336,7 +386,7 @@
     if (d.slicerEl) d.slicerEl.remove();
     const wrap = mk('div'); d.slicerEl = wrap;
     const cols = Object.keys(d.filters);
-    if (!cols.length) wrap.append(mk('p', 'note', 'No usable columns found for slicers on this sheet.'));
+    if (!cols.length) wrap.append(mk('p', 'note', 'No filterable columns found on this sheet.'));
     for (const col of cols) {
       const f = d.filters[col];
       const det = mk('details', 'sl');
@@ -359,12 +409,13 @@
         a.oninput = () => { f.lo = a.value ? new Date(a.value + 'T00:00:00').getTime() : f.lo0; refreshData(); };
         b.oninput = () => { f.hi = b.value ? new Date(b.value + 'T23:59:59').getTime() : f.hi0; refreshData(); };
       } else {
-        body.innerHTML = '<input type="search" placeholder="Text contains…">';
+        body.innerHTML = '<input type="search" placeholder="Contains text…">';
         body.querySelector('input').oninput = e => { f.q = e.target.value.trim().toLowerCase(); refreshData(); };
       }
       f.el = det; det.classList.toggle('on', isActive(f));
       wrap.append(det);
     }
+    $('#slicers').innerHTML = '';
     $('#slicers').append(wrap);
   }
 
@@ -373,9 +424,10 @@
     const a = state.active;
     if (a) {
       if (!a.slicerEl) buildSlicerUI(a);
-      a.slicerEl.style.display = '';
+      else { $('#slicers').innerHTML = ''; $('#slicers').append(a.slicerEl); a.slicerEl.style.display = ''; }
     }
     $('#resetSlicers').style.display = a ? '' : 'none';
+    updateFilterBadge();
   }
 
   function setPinCol(d, col) {
@@ -388,7 +440,7 @@
     const good = state.datasets.filter(d => d.matched == null || d.matched > 0);
     const pick = (good.length ? good : state.datasets).slice(0, 2);
     state.layers = [];
-    const ramps = pick.length === 1 ? ['orig'] : ['cool', 'warm'];
+    const ramps = pick.length === 1 ? ['warm'] : ['warm', 'cool'];
     pick.forEach((d, i) => state.layers.push(newLayer({ ds: d.id, ramp: ramps[i] })));
     state.layersTouched = false;
   }
@@ -413,107 +465,93 @@
     pc.innerHTML = '';
     const sid = $('#pivotSheetSel').value;
     if (sid === 'none') {
-        pc.disabled = true;
-        pc.innerHTML = '<option>--</option>';
-        state.pivotSheet = null;
-        state.pivotCol = null;
+      pc.disabled = true;
+      pc.innerHTML = '<option>--</option>';
+      state.pivotSheet = null;
+      state.pivotCol = null;
     } else {
-        pc.disabled = false;
-        const d = dsById(+sid);
-        d.cols.forEach(c => {
-            const o = mk('option', '', c);
-            o.value = c;
-            pc.append(o);
-        });
-        
-        if (!state.pivotCol || !d.cols.includes(state.pivotCol)) {
-            const auto = d.cols.find(c => c.toLowerCase().trim() === 'primary');
-            state.pivotCol = auto || d.cols[0];
-        }
-        pc.value = state.pivotCol;
-        state.pivotSheet = +sid;
+      pc.disabled = false;
+      const d = dsById(+sid);
+      d.cols.forEach(c => { const o = mk('option', '', c); o.value = c; pc.append(o); });
+      if (!state.pivotCol || !d.cols.includes(state.pivotCol)) {
+        const auto = d.cols.find(c => /primary|store|dealer|shop|name/i.test(c));
+        state.pivotCol = auto || d.cols[0];
+      }
+      pc.value = state.pivotCol;
+      state.pivotSheet = +sid;
     }
     refreshCard();
   }
 
   function syncDataControls() {
-    $('#sheetConfig').style.display = state.active ? 'block' : 'none';
+    const hasData = !!state.active;
+    $('#sheetConfig').style.display = hasData ? 'block' : 'none';
+    $('#popupSection').style.display = hasData ? 'block' : 'none';
     $('#sheetRow').style.display = multi() ? 'block' : 'none';
-    
+
     const ss = $('#sheetSel'); ss.innerHTML = '';
     state.datasets.forEach(d => { const o = mk('option', '', d.name + ' (' + d.rows.length.toLocaleString() + ' rows)'); o.value = d.id; ss.append(o); });
     if (state.active) ss.value = state.active.id;
-    
+
     const ps = $('#pinCol'); ps.innerHTML = '';
     if (state.active) {
       state.active.cols.forEach(c => { const o = mk('option', '', c); o.value = c; ps.append(o); });
       ps.value = state.active.pinCol;
     }
 
-    $('#pivotConfig').style.display = state.datasets.length ? 'block' : 'none';
     const pivS = $('#pivotSheetSel');
-    pivS.innerHTML = '<option value="none">None (Standard List)</option>';
-    state.datasets.forEach(d => {
-        const o = mk('option', '', d.name);
-        o.value = d.id;
-        pivS.append(o);
-    });
+    pivS.innerHTML = '<option value="none">None (Standard Summary)</option>';
+    state.datasets.forEach(d => { const o = mk('option', '', d.name); o.value = d.id; pivS.append(o); });
     if (state.pivotSheet) pivS.value = state.pivotSheet;
     updatePivotCols();
   }
 
-  function ingestSheets(sheets, label) {
+  function ingestSheets(sheets) {
     const ds = sheets.filter(s => s.rows.length).map((s, i) => {
-      const d = { 
-        id: i + 1, name: s.name, rows: s.rows, cols: Object.keys(s.rows[0]), 
-        pins: [], pinCol: null, filters: {}, numCols: [], colType: {}, 
-        groups: new Map(), unm: new Map(), kept: 0, noPin: 0, slicerEl: null, infoFields: [] 
+      const d = {
+        id: i + 1, name: s.name, rows: s.rows, cols: Object.keys(s.rows[0]),
+        pins: [], pinCol: null, filters: {}, numCols: [], colType: {},
+        groups: new Map(), unm: new Map(), kept: 0, noPin: 0, slicerEl: null, infoFields: []
       };
       d.pinCol = guessPinCol(d.cols, d.rows); setPinCol(d, d.pinCol); analyze(d);
       return d;
     });
-    if (!ds.length) throw new Error('No sheet with data was found.');
-    $('#slicers').innerHTML = '';
+    if (!ds.length) throw new Error('No sheet with rows found.');
     state.datasets = ds; state.activeTouched = false;
     state.active = ds.find(d => d.matched > 0) || ds[0];
 
-    let foundPivot = false;
+    state.pivotSheet = null; state.pivotCol = null;
     for (const d of ds) {
-        const pColMatch = d.cols.find(c => c.toLowerCase().trim() === 'primary');
-        if (pColMatch) {
-            state.pivotSheet = d.id;
-            state.pivotCol = pColMatch;
-            foundPivot = true;
-            break;
-        }
-    }
-    if (!foundPivot) {
-        state.pivotSheet = null;
-        state.pivotCol = null;
+      const pColMatch = d.cols.find(c => c.toLowerCase().trim() === 'primary');
+      if (pColMatch) { state.pivotSheet = d.id; state.pivotCol = pColMatch; break; }
     }
 
     autoLayers(); state.needFit = true;
     syncDataControls(); showSlicers(); renderLayerUI(); renderInfoUI();
     const total = ds.reduce((a, d) => a + d.rows.length, 0);
-    setStatus('#dataStatus', total.toLocaleString() + ' rows loaded.', 'ok');
+    setStatus('#dataStatus', total.toLocaleString() + ' rows loaded across ' + ds.length + ' sheet(s).', 'ok');
     refreshData();
   }
 
   async function loadData(file) {
-    setStatus('#dataStatus', 'Reading…');
-    try { ingestSheets(sheetsFromBuffer(await readBuffer(file)), file.name); }
-    catch (e) { setStatus('#dataStatus', 'Could not read the file: ' + e.message, 'err'); }
+    setStatus('#dataStatus', 'Reading ' + file.name + '…');
+    try { ingestSheets(sheetsFromBuffer(await readBuffer(file))); }
+    catch (e) { setStatus('#dataStatus', 'Could not read file: ' + e.message, 'err'); }
   }
 
   let layerSeq = 0;
   function newLayer(over) {
     const usedR = state.layers.map(l => l.ramp), usedS = state.layers.map(l => l.shape);
-    const ramp = NEXT_RAMPS.find(p => !usedR.includes(p)) || 'orig';
+    const ramp = NEXT_RAMPS.find(p => !usedR.includes(p)) || 'warm';
     const shape = SHAPES.find(s => !usedS.includes(s)) || 'circle';
     const ds = state.datasets.length ? state.datasets[state.layers.length % state.datasets.length].id : null;
-    return Object.assign({ id: ++layerSeq, ds, measure: '__count', agg: 'sum', ramp, shape, heat: true, dots: 'ring', scale: 'linear', ovl: 'max', visible: true, pts: [], min: 0, max: 0 }, over);
+    return Object.assign({
+      id: ++layerSeq, ds, measure: '__count', agg: 'sum', ramp, shape,
+      heat: true, dots: 'ring', scale: 'linear', ovl: 'max', visible: true,
+      pts: [], min: 0, max: 0, _offCanvas: null
+    }, over);
   }
-  
+
   const AGG_NAMES = { sum: 'Total of ', avg: 'Average of ', max: 'Highest ' };
   function labelOf(L) {
     const d = dsOf(L);
@@ -539,76 +577,86 @@
     state.layers.forEach(L => {
       let d = dsOf(L);
       if (!d && state.datasets.length) { d = state.datasets[0]; L.ds = d.id; }
-      
-      // Update data measures to include ALL valid columns in the dataset
-      const measures = [['__count', 'Row count']];
-      if (d) {
-         d.cols.forEach(c => measures.push([c, c]));
-      }
 
+      const measures = [['__count', 'Row count (Frequency)']];
+      if (d) d.cols.forEach(c => measures.push([c, c]));
       if (L.measure !== '__count' && (!d || !d.cols.includes(L.measure))) L.measure = '__count';
 
       const card = mk('div', 'lcard');
       const head = mk('div', 'lhead');
-      const vis = mk('input'); vis.type = 'checkbox'; vis.checked = L.visible; vis.title = 'Show / hide this layer';
+      const vis = mk('input'); vis.type = 'checkbox'; vis.checked = L.visible; vis.title = 'Toggle layer visibility';
       vis.onchange = () => { L.visible = vis.checked; restyle(); };
       const title = mk('b', '', labelOf(L));
       const pos = state.layers.indexOf(L);
-      const up = mk('button', '', '↑'); up.title = 'Move up'; up.disabled = pos === 0;
+      const up = mk('button', '', '↑'); up.disabled = pos === 0;
       up.onclick = () => { state.layersTouched = true; state.layers.splice(pos, 1); state.layers.splice(pos - 1, 0, L); renderLayerUI(); restyle(); };
-      const dn = mk('button', '', '↓'); dn.title = 'Move down'; dn.disabled = pos === state.layers.length - 1;
+      const dn = mk('button', '', '↓'); dn.disabled = pos === state.layers.length - 1;
       dn.onclick = () => { state.layersTouched = true; state.layers.splice(pos, 1); state.layers.splice(pos + 1, 0, L); renderLayerUI(); restyle(); };
-      const rm = mk('button', '', '×'); rm.title = 'Remove this layer'; rm.disabled = state.layers.length <= 1;
+      const rm = mk('button', '', '×'); rm.disabled = state.layers.length <= 1;
       rm.onclick = () => { state.layersTouched = true; state.layers = state.layers.filter(x => x !== L); renderLayerUI(); restyle(); };
       head.append(vis, title);
       if (state.layers.length > 1) head.append(up, dn);
       head.append(rm);
       card.append(head);
-      
+
       const note = mk('p', 'help err'); note.style.display = 'none'; L.noteEl = note; card.append(note);
 
       if (multi()) {
-        const sh = mkSelect(state.datasets.map(x => [x.id, x.name]), L.ds, v => { state.layersTouched = true; L.ds = +v; L.measure = '__count'; renderLayerUI(); refreshData(); });
+        const sh = mkSelect(state.datasets.map(x => [x.id, x.name]), L.ds, v => {
+          state.layersTouched = true; L.ds = +v; L.measure = '__count'; renderLayerUI(); refreshData();
+        });
         card.append(mkField('Sheet', sh));
       }
 
-      const sa = mkSelect([['sum', 'Total (sum)'], ['avg', 'Average'], ['max', 'Highest']], L.agg, v => { L.agg = v; title.textContent = labelOf(L); refreshData(); });
+      const sa = mkSelect([['sum', 'Sum'], ['avg', 'Average'], ['max', 'Max']], L.agg, v => { L.agg = v; title.textContent = labelOf(L); refreshData(); });
       sa.disabled = L.measure === '__count';
       const sm = mkSelect(measures, L.measure, v => { state.layersTouched = true; L.measure = v; sa.disabled = v === '__count'; title.textContent = labelOf(L); refreshData(); });
       const two = mk('div', 'two');
-      two.append(mkField('Colour it by', sm), mkField('Per pincode, use', sa));
+      two.append(mkField('Metric', sm), mkField('Aggregation', sa));
       card.append(two);
 
       const swatch = mk('div', 'swatch'); swatch.style.background = RAMPS[L.ramp].css;
       const sp = mkSelect(Object.entries(RAMPS).map(([k, r]) => [k, r.name]), L.ramp, v => { L.ramp = v; swatch.style.background = RAMPS[v].css; restyle(); });
-      const colorField = mkField('Colours', sp); colorField.append(swatch);
+      const colorField = mkField('Color Palette', sp); colorField.append(swatch);
       card.append(colorField);
 
-      const ss = mkSelect([['linear', 'Linear'], ['sqrt', 'Square root'], ['log', 'Log']], L.scale, v => { L.scale = v; restyle(); });
-      const so = mkSelect([['max', 'On its own'], ['sum', 'Stacked']], L.ovl, v => { L.ovl = v; restyle(); });
-      const two2 = mk('div', 'two');
-      two2.append(mkField('Colour scale', ss), mkField('Where heat overlaps', so));
-      card.append(two2);
+      // Quick Pill Toggles for Heat & Dots
+      const pills = mk('div', 'pills');
+      const heatLbl = mk('label', 'pill-toggle');
+      const heatCb = mk('input'); heatCb.type = 'checkbox'; heatCb.checked = L.heat !== false;
+      heatCb.onchange = () => { L.heat = heatCb.checked; restyle(); };
+      heatLbl.append(heatCb, document.createTextNode('Heatmap Glow'));
 
-      const heatF = mkSelect([['on', 'Visible'], ['off', 'Hidden']], L.heat !== false ? 'on' : 'off', v => { L.heat = (v === 'on'); restyle(); });
-      const sd = mkSelect([['off', 'None'], ['ring', 'Outline'], ['fill', 'Filled']], L.dots, v => { L.dots = v; restyle(); });
-      const two3 = mk('div', 'two');
-      two3.append(mkField('Show heat', heatF), mkField('Pincode dots', sd));
-      card.append(two3);
+      const dotLbl = mk('label', 'pill-toggle');
+      const dotCb = mk('input'); dotCb.type = 'checkbox'; dotCb.checked = L.dots !== 'off';
+      dotCb.onchange = () => { L.dots = dotCb.checked ? 'ring' : 'off'; restyle(); };
+      dotLbl.append(dotCb, document.createTextNode('Pincode Dots'));
+      pills.append(heatLbl, dotLbl);
+      card.append(pills);
 
+      // Collapsible Advanced Settings
+      const adv = mk('details', 'plain');
+      adv.append(mk('summary', '', 'Advanced layer options'));
+      const ss = mkSelect([['linear', 'Linear'], ['sqrt', 'Square root'], ['log', 'Logarithmic']], L.scale, v => { L.scale = v; restyle(); });
+      const so = mkSelect([['max', 'Independent (Max)'], ['sum', 'Additive (Stacked)']], L.ovl, v => { L.ovl = v; restyle(); });
+      const advTwo1 = mk('div', 'two');
+      advTwo1.append(mkField('Scale', ss), mkField('Overlap Mode', so));
+
+      const sd = mkSelect([['ring', 'Proportional Ring'], ['fill', 'Solid Dot'], ['off', 'Hidden']], L.dots, v => { L.dots = v; dotCb.checked = (v !== 'off'); restyle(); });
       const shapeSel = mkSelect(SHAPES.map(s => [s, SHAPE_ICON[s] + ' ' + s]), L.shape, v => { L.shape = v; restyle(); });
-      const two4 = mk('div', 'two');
-      two4.append(mkField('Dot shape', shapeSel));
-      card.append(two4);
+      const advTwo2 = mk('div', 'two');
+      advTwo2.append(mkField('Dot Style', sd), mkField('Dot Shape', shapeSel));
+      adv.append(advTwo1, advTwo2);
+      card.append(adv);
 
       host.append(card);
     });
   }
 
   const AGG_OPTS = {
-    num:  [['sum', 'Total'], ['avg', 'Average'], ['min', 'Lowest'], ['max', 'Highest'], ['count', 'Count filled'], ['distinct', 'Distinct values'], ['top', 'Most common']],
-    date: [['latest', 'Latest'], ['earliest', 'Earliest'], ['count', 'Count filled']],
-    cat:  [['top', 'Most common'], ['list', 'List of values'], ['distinct', 'Distinct values'], ['count', 'Count filled']]
+    num:  [['sum', 'Total'], ['avg', 'Average'], ['min', 'Lowest'], ['max', 'Highest'], ['count', 'Count'], ['distinct', 'Distinct'], ['top', 'Most common']],
+    date: [['latest', 'Latest'], ['earliest', 'Earliest'], ['count', 'Count']],
+    cat:  [['top', 'Most common'], ['list', 'List values'], ['distinct', 'Distinct'], ['count', 'Count']]
   };
   const aggLabel = (f, d) => (AGG_OPTS[(d && d.colType[f.col]) || 'cat'].find(a => a[0] === f.agg) || [0, f.agg])[1];
   const defaultAgg = (d, col) => ({ num: 'sum', date: 'latest', cat: 'top' }[d.colType[col] || 'cat']);
@@ -617,19 +665,14 @@
     const host = $('#infoFields'); host.innerHTML = '';
     const d = state.active;
     if (!d) return;
-    
     d.infoFields = d.infoFields.filter(f => d.colType[f.col]);
-    
     d.infoFields.forEach((f, i) => {
       const row = mk('div', 'frow');
-      
-      // Update options to include all columns on the sheet
-      const sc = mkSelect(d.cols.map(c => [c, c]), f.col, v => { f.col = v; f.agg = defaultAgg(d, v); renderInfoUI(); });
-      const sa = mkSelect(AGG_OPTS[d.colType[f.col] || 'cat'], f.agg, v => { f.agg = v; });
-      const x = mk('button', '', '×'); x.title = 'Remove';
-      x.onclick = () => { d.infoFields.splice(i, 1); renderInfoUI(); };
-      
-      row.append(sc, sa, x); 
+      const sc = mkSelect(d.cols.map(c => [c, c]), f.col, v => { f.col = v; f.agg = defaultAgg(d, v); renderInfoUI(); refreshCard(); });
+      const sa = mkSelect(AGG_OPTS[d.colType[f.col] || 'cat'], f.agg, v => { f.agg = v; refreshCard(); });
+      const x = mk('button', '', '×'); x.title = 'Remove field';
+      x.onclick = () => { d.infoFields.splice(i, 1); renderInfoUI(); refreshCard(); };
+      row.append(sc, sa, x);
       host.append(row);
     });
   }
@@ -671,20 +714,15 @@
 
   function describe(o) {
     const lines = ['Pincode ' + o.pin];
-
     state.layers.forEach(L => {
       if (!L.visible) return;
       const d = dsOf(L), g = d && o.per[d.id];
       lines.push(labelOf(L) + ': ' + (g ? nf.format(layerCalc(L, g.idx)) : '—'));
     });
 
-    const pSheetId = state.pivotSheet;
-    const pCol = state.pivotCol;
-    
+    const pSheetId = state.pivotSheet, pCol = state.pivotCol;
     if (pSheetId && pCol) {
-      const pd = dsById(pSheetId);
-      const pg = pd && o.per[pSheetId];
-      
+      const pd = dsById(pSheetId), pg = pd && o.per[pSheetId];
       if (pg) {
         const pivotGroups = new Map();
         pg.idx.forEach(i => {
@@ -693,30 +731,22 @@
           if (!pivotGroups.has(key)) pivotGroups.set(key, []);
           pivotGroups.get(key).push(i);
         });
-
         const linkCols = pd.cols.filter(c => /link|url|map/i.test(c));
-
         pivotGroups.forEach((indices, pKey) => {
-          const block = document.createElement('div');
+          const block = mk('div');
           Object.assign(block.style, {
-            marginTop: '8px', padding: '8px', 
-            background: 'rgba(0,0,0,0.03)', borderRadius: '6px', 
-            border: '1px solid #eaeaea'
+            marginTop: '8px', padding: '8px',
+            background: 'rgba(255,255,255,0.04)', borderRadius: '6px',
+            border: '1px solid var(--line)'
           });
-
-          const title = document.createElement('div');
-          title.style.fontWeight = 'bold';
-          title.style.marginBottom = '4px';
-          title.style.fontSize = '12px';
-          title.textContent = (multi() ? pd.name + ' · ' : '') + pKey;
+          const title = mk('div', '', (multi() ? pd.name + ' · ' : '') + pKey);
+          Object.assign(title.style, { fontWeight: '700', marginBottom: '4px', color: '#fff' });
           block.appendChild(title);
 
           pd.infoFields.forEach(f => {
-            if (f.col === pCol) return; 
-            const valLine = document.createElement('div');
-            valLine.style.fontSize = '11.5px';
-            valLine.style.color = '#444';
-            valLine.textContent = f.col + ': ' + fieldValue(f, indices, pd);
+            if (f.col === pCol) return;
+            const valLine = mk('div', '', f.col + ': ' + fieldValue(f, indices, pd));
+            Object.assign(valLine.style, { fontSize: '11.5px', color: 'var(--muted)' });
             block.appendChild(valLine);
           });
 
@@ -725,64 +755,47 @@
             linkCols.forEach(c => {
               const val = String(pd.rows[i][c] || '').trim();
               if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
-                let cleanUrl = val;
-                if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
-                groupLinks.add(cleanUrl);
+                groupLinks.add(/^https?:\/\//i.test(val) ? val : 'https://' + val);
               }
             });
           });
-
           groupLinks.forEach(url => {
-            const a = document.createElement('a');
-            a.href = url;
-            a.target = '_blank';
-            a.textContent = '📍 ' + pKey; 
-            Object.assign(a.style, { display: 'block', marginTop: '6px', fontSize: '11.5px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
+            const a = mk('a', '', '📍 ' + pKey);
+            a.href = url; a.target = '_blank'; a.rel = 'noopener';
+            Object.assign(a.style, { display: 'block', marginTop: '5px', fontSize: '11.5px', color: 'var(--accent)', textDecoration: 'none', fontWeight: '600' });
             block.appendChild(a);
           });
-
           lines.push(block);
         });
       }
     }
 
     state.datasets.forEach(d => {
-      if (pSheetId && d.id === pSheetId) return; 
-      
+      if (pSheetId && d.id === pSheetId) return;
       const g = o.per[d.id];
       if (!g) return;
-
       d.infoFields.forEach(f => {
-        lines.push((multi() ? d.name + ' · ' : '') + f.col + ' · ' + aggLabel(f, d) + ': ' + fieldValue(f, g.idx, d));
+        lines.push((multi() ? d.name + ' · ' : '') + f.col + ' (' + aggLabel(f, d) + '): ' + fieldValue(f, g.idx, d));
       });
-      
       const linkCols = d.cols.filter(c => /link|url|map/i.test(c));
       const links = new Set();
       g.idx.forEach(i => {
         linkCols.forEach(c => {
           const val = String(d.rows[i][c] || '').trim();
           if (/^(https?:\/\/|www\.)/i.test(val) || val.includes('maps.app.goo.gl') || val.includes('google.com/maps')) {
-            let cleanUrl = val;
-            if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = 'https://' + cleanUrl;
-            links.add(cleanUrl);
+            links.add(/^https?:\/\//i.test(val) ? val : 'https://' + val);
           }
         });
       });
-
       links.forEach(url => {
-        const a = document.createElement('a');
-        a.href = url;
-        a.target = '_blank';
-        a.textContent = '📍 ' + (url.toLowerCase().includes('maps') ? 'Google Maps Link' : 'Open Link');
-        Object.assign(a.style, { display: 'block', marginTop: '6px', color: '#1f78e0', textDecoration: 'none', fontWeight: 'bold' });
+        const a = mk('a', '', '📍 ' + (url.toLowerCase().includes('maps') ? 'Open in Google Maps' : 'Open Link'));
+        a.href = url; a.target = '_blank'; a.rel = 'noopener';
+        Object.assign(a.style, { display: 'block', marginTop: '6px', color: 'var(--accent)', textDecoration: 'none', fontWeight: '600' });
         lines.push(a);
       });
     });
 
-    if (lines.length === 1) {
-      lines.push('No extra info added.');
-    }
-
+    if (lines.length === 1) lines.push('Click "+ Add column to popup card" in Tab 1 to show more details.');
     return lines;
   }
 
@@ -793,44 +806,35 @@
     }
     return null;
   }
-  
+
   function setCursor(on) {
     if (!state.map || state.cursor === on) return;
     state.cursor = on;
     state.map.setOptions({ draggableCursor: on ? 'pointer' : null });
   }
-  
+
   function onMouseMove(e) {
-    if (e.buttons) return; 
+    if (e.buttons) return;
     const rect = $('#map').getBoundingClientRect();
-    const hit = hitAt(e.clientX - rect.left, e.clientY - rect.top);
-    setCursor(!!hit);
+    setCursor(!!hitAt(e.clientX - rect.left, e.clientY - rect.top));
   }
-  
+
   function showCard(o) {
     state.pinnedPin = o.pin;
     const lines = describe(o);
     $('#cardTitle').textContent = lines[0];
     const body = $('#cardBody'); body.innerHTML = '';
-    
-    lines.slice(1).forEach(t => {
-      if (t instanceof HTMLElement) {
-        body.append(t);
-      } else {
-        body.append(mk('div', '', t));
-      }
-    });
-    
+    lines.slice(1).forEach(t => body.append(t instanceof HTMLElement ? t : mk('div', '', t)));
     $('#card').style.display = 'block';
   }
-  
+
   function closeCard() { state.pinnedPin = null; $('#card').style.display = 'none'; }
-  
+
   function refreshCard() {
     const o = state.pinnedPin && state.pointByPin.get(state.pinnedPin);
     if (o) showCard(o); else closeCard();
   }
-  
+
   function onMapClick(e) {
     if (!state.ov || !e || !e.latLng) return;
     const proj = state.ov.getProjection(); if (!proj) return;
@@ -873,7 +877,8 @@
       d.groups = g; d.unm = unm; d.kept = kept; d.noPin = noPin;
       Object.values(d.filters).forEach(f => { if (f.el) f.el.classList.toggle('on', isActive(f)); });
     }
-    
+    updateFilterBadge();
+
     const u = new Map();
     state.datasets.forEach(d => d.groups.forEach((o, p) => {
       let x = u.get(p);
@@ -883,18 +888,16 @@
     state.pointByPin = u; state.points = [...u.values()];
     paintStats();
     $('#empty').style.display = (state.datasets.length && state.lookup.size && state.map) ? 'none' : 'flex';
-    $('#empty').textContent = !state.datasets.length ? 'Upload your data to see the heatmap.' : (!state.lookup.size ? 'Waiting for the pincode file…' : 'Waiting for the map…');
   }
 
   function paintStats() {
     const unmAll = [];
-    state.datasets.forEach(d => {
-      d.unm.forEach((c, p) => unmAll.push([d.name, p, c]));
-    });
+    state.datasets.forEach(d => d.unm.forEach((c, p) => unmAll.push([d.name, p, c])));
     unmAll.sort((a, b) => b[2] - a[2]);
     state.unmatched = unmAll;
+    $('#unmCount').textContent = unmAll.length;
     $('#unmBox').style.display = unmAll.length ? '' : 'none';
-    $('#unmList').textContent = unmAll.slice(0, 300).map(([n, p, c]) => (multi() ? n + ': ' : '') + p + '  (' + c + ' rows)').join('\n') + (unmAll.length > 300 ? '\n…and ' + (unmAll.length - 300) + ' more (download the CSV)' : '');
+    $('#unmList').textContent = unmAll.slice(0, 200).map(([n, p, c]) => (multi() ? n + ': ' : '') + p + ' (' + c + ' rows)').join('\n');
   }
 
   function buildLayerData() {
@@ -913,8 +916,8 @@
     state.layers.forEach(L => {
       if (!L.noteEl) return;
       const d = dsOf(L); let msg = '';
-      if (d && d.groups.size === 0) msg = 'No pincodes from "' + d.name + '" are on the map. Check the pincode column for this sheet.';
-      else if (d && !L.pts.length) msg = 'Nothing to draw: every value is zero or empty for this column.';
+      if (d && d.groups.size === 0) msg = 'No matching pincodes found on "' + d.name + '".';
+      else if (d && !L.pts.length) msg = 'All values are 0 or empty for this metric.';
       L.noteEl.textContent = msg; L.noteEl.style.display = msg ? '' : 'none';
     });
   }
@@ -923,38 +926,60 @@
     const host = $('#legend'); host.innerHTML = '';
     state.layers.filter(L => L.visible).forEach(L => {
       const row = mk('div', 'lrow');
-      const t = mk('div', 'lt'); t.append(mk('span', '', labelOf(L)));
-      if (L.dots !== 'off') t.append(document.createTextNode('  '), mk('span', '', SHAPE_ICON[L.shape]));
+      const t = mk('div', 'lt');
+      t.append(mk('span', '', labelOf(L)), mk('span', '', L.dots !== 'off' ? SHAPE_ICON[L.shape] : ''));
       const bar = mk('div', 'bar'); bar.style.background = RAMPS[L.ramp].css;
       const lg = mk('div', 'lg');
       if (L.pts.length) [0, .25, .5, .75, 1].forEach(x => lg.append(mk('span', '', nf1.format(unnorm(x, L.scale, L.max)))));
-      else lg.append(mk('span', '', 'no data'));
+      else lg.append(mk('span', '', 'No data loaded'));
       row.append(t, bar, lg);
-      let note = L.pts.length ? 'Highest value: ' + nf1.format(L.max) + '.' : '';
-      if (L.ovl === 'sum') note += ' Stacked: combined density of nearby pincodes.';
-      if (L.scale !== 'linear') note += ' Non-linear scale.';
-      if (note) row.append(mk('div', 'ln', note.trim()));
+      if (L.pts.length) row.append(mk('div', 'ln', L.pts.length.toLocaleString() + ' pincodes · Max: ' + nf1.format(L.max)));
       host.append(row);
     });
   }
 
+  // Pre-rendered radial stamp for fast canvas drawing
+  function getStamp() {
+    if (!state.stampCanvas) {
+      const sc = document.createElement('canvas');
+      sc.width = sc.height = 256;
+      const sctx = sc.getContext('2d');
+      const g = sctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      g.addColorStop(0, 'rgba(255,255,255,1)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, 256, 256);
+      state.stampCanvas = sc;
+    }
+    return state.stampCanvas;
+  }
+
   function heatCanvas(L, rp, w, h, op, toPx) {
-    const off = document.createElement('canvas'); off.width = w; off.height = h;
-    const x = off.getContext('2d');
-    x.fillStyle = '#000'; x.fillRect(0, 0, w, h);
+    if (!L._offCanvas) L._offCanvas = document.createElement('canvas');
+    const off = L._offCanvas;
+    if (off.width !== w) off.width = w;
+    if (off.height !== h) off.height = h;
+    const x = off.getContext('2d', { willReadFrequently: true });
+    x.globalCompositeOperation = 'source-over';
+    x.fillStyle = '#000';
+    x.fillRect(0, 0, w, h);
     x.globalCompositeOperation = L.ovl === 'sum' ? 'lighter' : 'lighten';
+
+    const stamp = getStamp(), diam = rp * 2;
     for (const d of L.pts) {
       const p = toPx(d); if (!p) continue;
       if (p.x < -rp || p.x > w + rp || p.y < -rp || p.y > h + rp) continue;
-      const g = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1));
-      const gr = x.createRadialGradient(p.x, p.y, 0, p.x, p.y, rp);
-      gr.addColorStop(0, 'rgb(' + g + ',' + g + ',' + g + ')');
-      gr.addColorStop(1, 'rgba(' + g + ',' + g + ',' + g + ',0)');
-      x.fillStyle = gr; x.beginPath(); x.arc(p.x, p.y, rp, 0, 6.2832); x.fill();
+      const intensity = clamp(norm(d.q, L.scale, L.max), 0, 1);
+      if (intensity <= 0) continue;
+      x.globalAlpha = intensity;
+      x.drawImage(stamp, p.x - rp, p.y - rp, diam, diam);
     }
+    x.globalAlpha = 1;
+
     const img = x.getImageData(0, 0, w, h), px = img.data, lut = RAMPS[L.ramp].lut;
     for (let i = 0; i < px.length; i += 4) {
       const j = px[i] * 4;
+      if (j === 0) { px[i + 3] = 0; continue; }
       px[i] = lut[j]; px[i + 1] = lut[j + 1]; px[i + 2] = lut[j + 2]; px[i + 3] = lut[j + 3] * op;
     }
     x.globalCompositeOperation = 'source-over';
@@ -975,34 +1000,29 @@
     for (const d of L.pts) {
       const p = toPx(d); if (!p) continue;
       if (p.x < -20 || p.x > ctx.canvas.width + 20 || p.y < -20 || p.y > ctx.canvas.height + 20) continue;
-      
       let r;
       if (L.heat === false) {
         r = 6;
         shapePath(ctx, L.shape, p.x, p.y, r);
         if (L.dots === 'ring') {
-            ctx.lineWidth = 4.0; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
-            ctx.lineWidth = 2.5; ctx.strokeStyle = '#1f78e0'; ctx.stroke(); 
+          ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.stroke();
+          ctx.lineWidth = 2; ctx.strokeStyle = '#eab308'; ctx.stroke();
         } else {
-            ctx.fillStyle = '#111'; 
-            ctx.fill();
-            ctx.lineWidth = 1.6; ctx.strokeStyle = '#fff'; ctx.stroke(); 
+          ctx.fillStyle = '#eab308'; ctx.fill();
+          ctx.lineWidth = 1.5; ctx.strokeStyle = '#000'; ctx.stroke();
         }
-      } 
-      else {
-        if (L.dots === 'ring') {
-            r = 3 + 9 * Math.sqrt(clamp(d.q / L.max, 0, 1));
-            shapePath(ctx, L.shape, p.x, p.y, r);
-            ctx.lineWidth = 3.6; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
-            ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgb(' + ramp.accent.join(',') + ')'; ctx.stroke();
-        } else {
-            r = 5;
-            const j = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1)) * 4;
-            shapePath(ctx, L.shape, p.x, p.y, r);
-            ctx.fillStyle = 'rgb(' + ramp.lut[j] + ',' + ramp.lut[j + 1] + ',' + ramp.lut[j + 2] + ')'; 
-            ctx.fill();
-            ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(25,25,25,.9)'; ctx.stroke();
-        }
+      } else if (L.dots === 'ring') {
+        r = 3 + 9 * Math.sqrt(clamp(d.q / L.max, 0, 1));
+        shapePath(ctx, L.shape, p.x, p.y, r);
+        ctx.lineWidth = 3.4; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
+        ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgb(' + ramp.accent.join(',') + ')'; ctx.stroke();
+      } else {
+        r = 5;
+        const j = Math.round(255 * clamp(norm(d.q, L.scale, L.max), 0, 1)) * 4;
+        shapePath(ctx, L.shape, p.x, p.y, r);
+        ctx.fillStyle = 'rgb(' + ramp.lut[j] + ',' + ramp.lut[j + 1] + ',' + ramp.lut[j + 2] + ')';
+        ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(15,17,21,.9)'; ctx.stroke();
       }
       state.hits.push({ x: p.x, y: p.y, r: Math.max(r + 2, 7), pin: d.pin });
     }
@@ -1014,28 +1034,34 @@
     const proj = state.ov.getProjection(); if (!proj) return;
     const div = state.map.getDiv(), w = div.clientWidth, h = div.clientHeight;
     if (!w || !h) return;
-    const cv = state.canvas; cv.width = w; cv.height = h;
+    const cv = state.canvas;
+    if (cv.width !== w) cv.width = w;
+    if (cv.height !== h) cv.height = h;
     const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
 
     const km = +$('#radius').value, op = +$('#opacity').value;
-    const c = state.map.getCenter(), lat = c ? c.lat() : 22;
+    const c = state.map.getCenter(), lat = c ? c.lat() : 19.076;
     const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, state.map.getZoom());
     const rp = Math.max(6, km * 1000 / mpp);
 
     const cache = new Map();
     const toPx = d => {
       let p = cache.get(d.pin);
-      if (p === undefined) { p = proj.fromLatLngToContainerPixel(new google.maps.LatLng(d.lat, d.lng)) || null; cache.set(d.pin, p); }
+      if (p === undefined) {
+        let ll = state.latLngCache.get(d.pin);
+        if (!ll) { ll = new google.maps.LatLng(d.lat, d.lng); state.latLngCache.set(d.pin, ll); }
+        p = proj.fromLatLngToContainerPixel(ll) || null;
+        cache.set(d.pin, p);
+      }
       return p;
     };
-    
+
     const mapType = $('#basemap').value;
-    const blendMode = (mapType === 'dark' || mapType === 'gray' || mapType === 'satellite') ? 'screen' : 'multiply';
-    
-    ctx.globalCompositeOperation = blendMode;
+    ctx.globalCompositeOperation = (mapType === 'dark' || mapType === 'gray' || mapType === 'satellite') ? 'screen' : 'multiply';
     const order = state.layers.filter(L => L.visible && L.pts.length).reverse();
     order.forEach(L => { if (L.heat !== false) ctx.drawImage(heatCanvas(L, rp, w, h, op, toPx), 0, 0); });
-    
+
     ctx.globalCompositeOperation = 'source-over';
     order.forEach(L => { if (L.dots !== 'off') drawDots(ctx, L, toPx); });
   }
@@ -1050,25 +1076,50 @@
     state.map.fitBounds(bnd, 40);
   }
 
-  function restyle() { paintLegend(); render(); }
-  
+  function jumpToPincode() {
+    const pin = normPin($('#pinJump').value);
+    if (!pin) return;
+    const o = state.pointByPin.get(pin);
+    const ll = state.lookup.get(pin);
+    if (o && state.map) {
+      state.map.setCenter({ lat: o.lat, lng: o.lng });
+      state.map.setZoom(Math.max(state.map.getZoom(), 13));
+      showCard(o);
+    } else if (ll && state.map) {
+      state.map.setCenter({ lat: ll[0], lng: ll[1] });
+      state.map.setZoom(13);
+    }
+  }
+
+  function restyle() { paintLegend(); scheduleRender(); }
+
   const refreshData = debounce(() => {
     groupRows(); buildLayerData(); paintLayerNotes(); paintLegend(); refreshCard();
     if (state.needFit && state.map && state.points.length) { state.needFit = false; fitToData(); }
-    render();
-  }, 120);
+    scheduleRender();
+  }, 90);
 
   state.layers = [newLayer()];
   renderLayerUI();
 
+  // Drag and drop events
+  const dz = $('#dropzone');
+  ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
+  dz.addEventListener('drop', e => {
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if (f) loadData(f);
+  });
+
   $('#addLayer').onclick = () => { state.layersTouched = true; state.layers.push(newLayer()); renderLayerUI(); refreshData(); };
   $('#addField').onclick = () => {
     const d = state.active;
-    if (!d) return setStatus('#dataStatus', 'Upload your data first.', 'err');
+    if (!d) return;
     const col = Object.keys(d.colType)[0];
     if (!col) return;
     d.infoFields.push({ col, agg: defaultAgg(d, col) });
     renderInfoUI();
+    refreshCard();
   };
 
   $('#loadMap').onclick = startMap;
@@ -1076,27 +1127,21 @@
   $('#lookupFile').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     setStatus('#lookupStatus', 'Reading…');
-    try { state.lookup = buildLookup(firstSheetRows(await readBuffer(f))); lookupReady(f.name); }
-    catch (err) { setStatus('#lookupStatus', err.message, 'err'); }
+    try { state.lookup = buildLookup(firstSheetRows(await readBuffer(f))); lookupReady(); }
+    catch (err) { state.lookupOk = false; updateSetupPill(); setStatus('#lookupStatus', err.message, 'err'); }
   };
   $('#dataFile').onchange = e => { const f = e.target.files[0]; if (f) loadData(f); };
-  
+
   $('#sheetSel').onchange = e => {
     state.active = dsById(+e.target.value); state.activeTouched = true;
     syncDataControls(); showSlicers(); renderInfoUI();
   };
-  
   $('#pivotSheetSel').onchange = e => {
     state.pivotSheet = e.target.value === 'none' ? null : +e.target.value;
-    state.pivotCol = null; 
+    state.pivotCol = null;
     updatePivotCols();
   };
-  
-  $('#pivotColSel').onchange = e => {
-    state.pivotCol = e.target.value;
-    refreshCard();
-  };
-  
+  $('#pivotColSel').onchange = e => { state.pivotCol = e.target.value; refreshCard(); };
   $('#pinCol').onchange = e => {
     const d = state.active; if (!d) return;
     d.pinManual = true;
@@ -1105,12 +1150,14 @@
     showSlicers(); renderLayerUI(); renderInfoUI(); refreshData();
   };
 
-  $('#radius').addEventListener('input', e => { $('#oRadius').textContent = (+e.target.value) + ' km'; render(); });
-  $('#opacity').addEventListener('input', e => { $('#oOpacity').textContent = e.target.value; render(); });
+  $('#radius').addEventListener('input', e => { $('#oRadius').textContent = (+e.target.value) + ' km'; scheduleRender(); });
+  $('#opacity').addEventListener('input', e => { $('#oOpacity').textContent = e.target.value; scheduleRender(); });
   $('#basemap').onchange = applyBasemap;
   $('#cardX').onclick = closeCard;
-
   $('#zoomData').onclick = fitToData;
+  $('#pinJumpBtn').onclick = jumpToPincode;
+  $('#pinJump').addEventListener('keydown', e => { if (e.key === 'Enter') jumpToPincode(); });
+
   $('#resetSlicers').onclick = () => {
     const d = state.active; if (!d) return;
     analyze(d); buildSlicerUI(d); showSlicers(); renderLayerUI(); renderInfoUI(); refreshData();
@@ -1125,19 +1172,22 @@
   async function boot() {
     const key = CFG.GOOGLE_MAPS_API_KEY;
     if (key && !/PASTE|YOUR/i.test(key)) { $('#key').value = key; startMap(); }
-    else { setStatus('#mapStatus', 'No API key found in config.js.', 'err'); $('#manual').open = true; }
+    else { setStatus('#mapStatus', 'No API key found in config.js.', 'err'); $('#setupDrawer').classList.add('open'); }
 
     if (CFG.PINCODE_FILE) {
-      try { state.lookup = buildLookup(firstSheetRows(await fetchBuffer(CFG.PINCODE_FILE))); lookupReady(CFG.PINCODE_FILE); }
+      try { state.lookup = buildLookup(firstSheetRows(await fetchBuffer(CFG.PINCODE_FILE))); lookupReady(); }
       catch (e) {
-        setStatus('#lookupStatus', 'Could not load ' + CFG.PINCODE_FILE + ' (' + e.message + ').', 'err');
-        $('#manual').open = true;
+        setStatus('#lookupStatus', 'Could not load ' + CFG.PINCODE_FILE + '.', 'err');
+        $('#setupDrawer').classList.add('open');
       }
-    } else { setStatus('#lookupStatus', 'No PINCODE_FILE set in config.js.', 'err'); $('#manual').open = true; }
+    } else {
+      setStatus('#lookupStatus', 'No PINCODE_FILE configured.', 'err');
+      $('#setupDrawer').classList.add('open');
+    }
 
     if (CFG.DATA_FILE) {
-      try { ingestSheets(sheetsFromBuffer(await fetchBuffer(CFG.DATA_FILE)), CFG.DATA_FILE); }
-      catch (e) { setStatus('#dataStatus', 'Could not load ' + CFG.DATA_FILE + ' (' + e.message + ').', 'err'); }
+      try { ingestSheets(sheetsFromBuffer(await fetchBuffer(CFG.DATA_FILE))); }
+      catch (e) { setStatus('#dataStatus', 'Could not auto-load ' + CFG.DATA_FILE, 'err'); }
     }
   }
   boot();
