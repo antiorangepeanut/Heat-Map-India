@@ -1064,7 +1064,7 @@
     refreshCard();
   };
 
-  // Download Sample Template Button Handler: serves the static pincode_template.xlsx (no generated data)
+    // Download Sample Template Button Handler: serves the static pincode_template.xlsx (no generated data)
   $('#dlTemplate').onclick = async () => {
     const save = href => {
       const a = document.createElement('a');
@@ -1085,6 +1085,52 @@
     }
   };
 
+  // Download PNG: exports the current heat layers + dots (as drawn) with the legend.
+  // Google basemap tiles can't be exported from the browser, so layers go on a flat background.
+  $('#dlPng').onclick = () => {
+    const src = state.canvas;
+    if (!src || !src.width || !src.height) { alert('Load the map and data first.'); return; }
+    render();
+    const mt = $('#basemap').value, dark = (mt === 'dark' || mt === 'gray' || mt === 'satellite');
+    const W = src.width, H = src.height;
+    const out = document.createElement('canvas'); out.width = W; out.height = H;
+    const x = out.getContext('2d');
+    x.fillStyle = dark ? '#1a1d24' : '#f3f1ec'; x.fillRect(0, 0, W, H);
+    x.drawImage(src, 0, 0);
+
+    const layers = state.layers.filter(L => L.visible && L.pts.length);
+    if (layers.length) {
+      const pw = 270, rowH = 62, ph = 14 + layers.length * rowH;
+      const px0 = 12, py0 = H - ph - 12;
+      x.fillStyle = 'rgba(22,25,32,.92)'; x.strokeStyle = '#2c3240'; x.lineWidth = 1;
+      x.beginPath(); x.roundRect ? x.roundRect(px0, py0, pw, ph, 10) : x.rect(px0, py0, pw, ph);
+      x.fill(); x.stroke();
+      layers.forEach((L, i) => {
+        const y = py0 + 12 + i * rowH, lx = px0 + 12, bw = pw - 24;
+        x.fillStyle = '#f0f2f5'; x.font = '700 12px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
+        x.textBaseline = 'top'; x.textAlign = 'left';
+        let t = labelOf(L); while (t.length > 3 && x.measureText(t).width > bw) t = t.slice(0, -2) + '…';
+        x.fillText(t, lx, y);
+        const lut = RAMPS[L.ramp].lut, g = x.createLinearGradient(lx, 0, lx + bw, 0);
+        for (let k = 0; k <= 10; k++) { const j = Math.round(255 * k / 10) * 4; g.addColorStop(k / 10, 'rgb(' + lut[j] + ',' + lut[j + 1] + ',' + lut[j + 2] + ')'); }
+        x.fillStyle = g; x.fillRect(lx, y + 18, bw, 9);
+        x.fillStyle = '#949ba6'; x.font = '10.5px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
+        [0, .25, .5, .75, 1].forEach((f, k) => {
+          x.textAlign = k === 0 ? 'left' : k === 4 ? 'right' : 'center';
+          x.fillText(nf1.format(unnorm(f, L.scale, L.max)), lx + bw * f, y + 31);
+        });
+        x.textAlign = 'left';
+        x.fillText(L.pts.length.toLocaleString() + ' pincodes · Max: ' + nf1.format(L.max), lx, y + 45);
+      });
+    }
+    out.toBlob(b => {
+      if (!b) return;
+      const url = URL.createObjectURL(b), a = document.createElement('a');
+      a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }, 'image/png');
+  };
   $('#loadMap').onclick = startMap;
   $('#key').addEventListener('keydown', e => { if (e.key === 'Enter') startMap(); });
   $('#lookupFile').onchange = async e => {
