@@ -1085,49 +1085,47 @@
     }
   };
 
-  // Download PNG: current heat layers + dots + legend, over the real basemap.
-  // The basemap is rebuilt from the Google Static Maps API (same center/zoom/style), since the live map tiles
-  // can't be read from the page. Needs "Maps Static API" enabled on the key; falls back to a flat background.
-  function staticStyleParams(styles) {
-    return (styles || []).map(st => {
-      const parts = ['feature:' + (st.featureType || 'all'), 'element:' + (st.elementType || 'all')];
-      (st.stylers || []).forEach(o => Object.entries(o).forEach(([k, v]) =>
-        parts.push(k + ':' + String(v).replace('#', '0x'))));
-      return 'style=' + encodeURIComponent(parts.join('|'));
-    }).join('&');
-  }
-
-  async function drawBasemapTiles(x, W, H) {
-    const proj = state.ov && state.ov.getProjection();
-    const key = $('#key').value.trim();
-    if (!proj || !key) return false;
-    const mt = $('#basemap').value;
-    const type = (mt === 'dark' || mt === 'gray') ? 'roadmap' : mt;
-    const zoom = Math.round(state.map.getZoom());
-    const styles = staticStyleParams(STYLES[mt]);
-    const SZ = 640, STEP = 560, jobs = [];
-    for (let cy = SZ / 2 - 40; cy - SZ / 2 < H; cy += STEP) {
-      for (let cx = SZ / 2 - 40; cx - SZ / 2 < W; cx += STEP) {
-        const ll = proj.fromContainerPixelToLatLng(new google.maps.Point(cx, cy));
-        if (!ll) return false;
-        const url = 'https://maps.googleapis.com/maps/api/staticmap?center=' + ll.lat().toFixed(6) + ',' + ll.lng().toFixed(6) +
-          '&zoom=' + zoom + '&size=' + SZ + 'x' + SZ + '&scale=2&maptype=' + type + (styles ? '&' + styles : '') +
-          '&key=' + encodeURIComponent(key);
-        jobs.push(new Promise((res, rej) => {
-          const im = new Image(); im.crossOrigin = 'anonymous';
-          im.onload = () => res({ im, x: cx - SZ / 2, y: cy - SZ / 2 });
-          im.onerror = () => rej(new Error('tile failed'));
-          im.src = url;
-        }));
-      }
+  // Download PNG (free): captures the current tab with the browser's screen-capture prompt,
+  // then crops to the map area. Includes the real basemap, heat layers, dots and legend.
+  $('#dlPng').onclick = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      alert('Your browser does not support tab capture. Use a recent Chrome, Edge or Firefox on desktop.');
+      return;
     }
+    const btn = $('#dlPng'), label = btn.textContent;
+    let stream;
     try {
-      const tiles = await Promise.all(jobs);
-      tiles.forEach(t => x.drawImage(t.im, t.x, t.y, SZ, SZ));
-      return true;
-    } catch (e) { return false; }
-  }
-
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' }, audio: false,
+        preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude'
+      });
+    } catch (e) { return; } // user cancelled
+    btn.disabled = true; btn.textContent = 'Saving PNG…';
+    try {
+      const video = document.createElement('video');
+      video.srcObject = stream; video.muted = true; video.playsInline = true;
+      await video.play();
+      await new Promise(r => setTimeout(r, 500)); // let the first clean frame arrive
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const rect = $('#map').getBoundingClientRect();
+      const sx = vw / window.innerWidth, sy = vh / window.innerHeight;
+      const out = document.createElement('canvas');
+      out.width = Math.round(rect.width * sx); out.height = Math.round(rect.height * sy);
+      out.getContext('2d').drawImage(video, rect.left * sx, rect.top * sy, rect.width * sx, rect.height * sy, 0, 0, out.width, out.height);
+      await new Promise(res => out.toBlob(b => {
+        if (b) {
+          const url = URL.createObjectURL(b), a = document.createElement('a');
+          a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }
+        res();
+      }, 'image/png'));
+    } finally {
+      stream.getTracks().forEach(t => t.stop());
+      btn.disabled = false; btn.textContent = label;
+    }
+  };
   $('#dlPng').onclick = async () => {
     const src = state.canvas;
     if (!src || !src.width || !src.height) { alert('Load the map and data first.'); return; }
