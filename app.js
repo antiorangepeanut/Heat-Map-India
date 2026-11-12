@@ -1064,7 +1064,7 @@
     refreshCard();
   };
 
-    // Download Sample Template Button Handler: serves the static pincode_template.xlsx (no generated data)
+  // Download Sample Template Button Handler: serves the static pincode_template.xlsx (no generated data)
   $('#dlTemplate').onclick = async () => {
     const save = href => {
       const a = document.createElement('a');
@@ -1085,52 +1085,108 @@
     }
   };
 
-  // Download PNG: exports the current heat layers + dots (as drawn) with the legend.
-  // Google basemap tiles can't be exported from the browser, so layers go on a flat background.
-  $('#dlPng').onclick = () => {
+  // Download PNG: current heat layers + dots + legend, over the real basemap.
+  // The basemap is rebuilt from the Google Static Maps API (same center/zoom/style), since the live map tiles
+  // can't be read from the page. Needs "Maps Static API" enabled on the key; falls back to a flat background.
+  function staticStyleParams(styles) {
+    return (styles || []).map(st => {
+      const parts = ['feature:' + (st.featureType || 'all'), 'element:' + (st.elementType || 'all')];
+      (st.stylers || []).forEach(o => Object.entries(o).forEach(([k, v]) =>
+        parts.push(k + ':' + String(v).replace('#', '0x'))));
+      return 'style=' + encodeURIComponent(parts.join('|'));
+    }).join('&');
+  }
+
+  async function drawBasemapTiles(x, W, H) {
+    const proj = state.ov && state.ov.getProjection();
+    const key = $('#key').value.trim();
+    if (!proj || !key) return false;
+    const mt = $('#basemap').value;
+    const type = (mt === 'dark' || mt === 'gray') ? 'roadmap' : mt;
+    const zoom = Math.round(state.map.getZoom());
+    const styles = staticStyleParams(STYLES[mt]);
+    const SZ = 640, STEP = 560, jobs = [];
+    for (let cy = SZ / 2 - 40; cy - SZ / 2 < H; cy += STEP) {
+      for (let cx = SZ / 2 - 40; cx - SZ / 2 < W; cx += STEP) {
+        const ll = proj.fromContainerPixelToLatLng(new google.maps.Point(cx, cy));
+        if (!ll) return false;
+        const url = 'https://maps.googleapis.com/maps/api/staticmap?center=' + ll.lat().toFixed(6) + ',' + ll.lng().toFixed(6) +
+          '&zoom=' + zoom + '&size=' + SZ + 'x' + SZ + '&scale=2&maptype=' + type + (styles ? '&' + styles : '') +
+          '&key=' + encodeURIComponent(key);
+        jobs.push(new Promise((res, rej) => {
+          const im = new Image(); im.crossOrigin = 'anonymous';
+          im.onload = () => res({ im, x: cx - SZ / 2, y: cy - SZ / 2 });
+          im.onerror = () => rej(new Error('tile failed'));
+          im.src = url;
+        }));
+      }
+    }
+    try {
+      const tiles = await Promise.all(jobs);
+      tiles.forEach(t => x.drawImage(t.im, t.x, t.y, SZ, SZ));
+      return true;
+    } catch (e) { return false; }
+  }
+
+  $('#dlPng').onclick = async () => {
     const src = state.canvas;
     if (!src || !src.width || !src.height) { alert('Load the map and data first.'); return; }
-    render();
-    const mt = $('#basemap').value, dark = (mt === 'dark' || mt === 'gray' || mt === 'satellite');
-    const W = src.width, H = src.height;
-    const out = document.createElement('canvas'); out.width = W; out.height = H;
-    const x = out.getContext('2d');
-    x.fillStyle = dark ? '#1a1d24' : '#f3f1ec'; x.fillRect(0, 0, W, H);
-    x.drawImage(src, 0, 0);
+    const btn = $('#dlPng'), label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Preparing PNG…';
+    try {
+      render();
+      const mt = $('#basemap').value, dark = (mt === 'dark' || mt === 'gray' || mt === 'satellite');
+      const W = src.width, H = src.height;
+      const out = document.createElement('canvas'); out.width = W; out.height = H;
+      const x = out.getContext('2d');
+      x.fillStyle = dark ? '#1a1d24' : '#f3f1ec'; x.fillRect(0, 0, W, H);
+      const gotMap = await drawBasemapTiles(x, W, H);
+      x.drawImage(src, 0, 0);
 
-    const layers = state.layers.filter(L => L.visible && L.pts.length);
-    if (layers.length) {
-      const pw = 270, rowH = 62, ph = 14 + layers.length * rowH;
-      const px0 = 12, py0 = H - ph - 12;
-      x.fillStyle = 'rgba(22,25,32,.92)'; x.strokeStyle = '#2c3240'; x.lineWidth = 1;
-      x.beginPath(); x.roundRect ? x.roundRect(px0, py0, pw, ph, 10) : x.rect(px0, py0, pw, ph);
-      x.fill(); x.stroke();
-      layers.forEach((L, i) => {
-        const y = py0 + 12 + i * rowH, lx = px0 + 12, bw = pw - 24;
-        x.fillStyle = '#f0f2f5'; x.font = '700 12px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
-        x.textBaseline = 'top'; x.textAlign = 'left';
-        let t = labelOf(L); while (t.length > 3 && x.measureText(t).width > bw) t = t.slice(0, -2) + '…';
-        x.fillText(t, lx, y);
-        const lut = RAMPS[L.ramp].lut, g = x.createLinearGradient(lx, 0, lx + bw, 0);
-        for (let k = 0; k <= 10; k++) { const j = Math.round(255 * k / 10) * 4; g.addColorStop(k / 10, 'rgb(' + lut[j] + ',' + lut[j + 1] + ',' + lut[j + 2] + ')'); }
-        x.fillStyle = g; x.fillRect(lx, y + 18, bw, 9);
-        x.fillStyle = '#949ba6'; x.font = '10.5px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
-        [0, .25, .5, .75, 1].forEach((f, k) => {
-          x.textAlign = k === 0 ? 'left' : k === 4 ? 'right' : 'center';
-          x.fillText(nf1.format(unnorm(f, L.scale, L.max)), lx + bw * f, y + 31);
+      const layers = state.layers.filter(L => L.visible && L.pts.length);
+      if (layers.length) {
+        const pw = 270, rowH = 62, ph = 14 + layers.length * rowH;
+        const px0 = 12, py0 = H - ph - 12;
+        x.fillStyle = 'rgba(22,25,32,.92)'; x.strokeStyle = '#2c3240'; x.lineWidth = 1;
+        x.beginPath(); x.roundRect ? x.roundRect(px0, py0, pw, ph, 10) : x.rect(px0, py0, pw, ph);
+        x.fill(); x.stroke();
+        layers.forEach((L, i) => {
+          const y = py0 + 12 + i * rowH, lx = px0 + 12, bw = pw - 24;
+          x.fillStyle = '#f0f2f5'; x.font = '700 12px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
+          x.textBaseline = 'top'; x.textAlign = 'left';
+          let t = labelOf(L); while (t.length > 3 && x.measureText(t).width > bw) t = t.slice(0, -2) + '…';
+          x.fillText(t, lx, y);
+          const lut = RAMPS[L.ramp].lut, g = x.createLinearGradient(lx, 0, lx + bw, 0);
+          for (let k = 0; k <= 10; k++) { const j = Math.round(255 * k / 10) * 4; g.addColorStop(k / 10, 'rgb(' + lut[j] + ',' + lut[j + 1] + ',' + lut[j + 2] + ')'); }
+          x.fillStyle = g; x.fillRect(lx, y + 18, bw, 9);
+          x.fillStyle = '#949ba6'; x.font = '10.5px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
+          [0, .25, .5, .75, 1].forEach((f, k) => {
+            x.textAlign = k === 0 ? 'left' : k === 4 ? 'right' : 'center';
+            x.fillText(nf1.format(unnorm(f, L.scale, L.max)), lx + bw * f, y + 31);
+          });
+          x.textAlign = 'left';
+          x.fillText(L.pts.length.toLocaleString() + ' pincodes · Max: ' + nf1.format(L.max), lx, y + 45);
         });
-        x.textAlign = 'left';
-        x.fillText(L.pts.length.toLocaleString() + ' pincodes · Max: ' + nf1.format(L.max), lx, y + 45);
-      });
-    }
-    out.toBlob(b => {
-      if (!b) return;
-      const url = URL.createObjectURL(b), a = document.createElement('a');
-      a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    }, 'image/png');
+      }
+      if (gotMap) {
+        x.font = '10px Arial,sans-serif'; x.textAlign = 'right'; x.textBaseline = 'bottom';
+        const txt = 'Map data © Google';
+        x.fillStyle = dark ? 'rgba(0,0,0,.55)' : 'rgba(255,255,255,.7)';
+        x.fillRect(W - x.measureText(txt).width - 14, H - 17, x.measureText(txt).width + 14, 17);
+        x.fillStyle = dark ? '#ddd' : '#333'; x.fillText(txt, W - 6, H - 3);
+      } else {
+        alert('Could not load the basemap for the PNG (enable "Maps Static API" for your API key). Saved with a plain background instead.');
+      }
+      out.toBlob(b => {
+        if (!b) return;
+        const url = URL.createObjectURL(b), a = document.createElement('a');
+        a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }, 'image/png');
+    } finally { btn.disabled = false; btn.textContent = label; }
   };
+
   $('#loadMap').onclick = startMap;
   $('#key').addEventListener('keydown', e => { if (e.key === 'Enter') startMap(); });
   $('#lookupFile').onchange = async e => {
