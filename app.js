@@ -1085,104 +1085,62 @@
     }
   };
 
-  // Download PNG (free): captures the current tab with the browser's screen-capture prompt,
+  // Download PNG (free): captures the current tab via the browser's screen-capture prompt,
   // then crops to the map area. Includes the real basemap, heat layers, dots and legend.
   $('#dlPng').onclick = async () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      alert('Your browser does not support tab capture. Use a recent Chrome, Edge or Firefox on desktop.');
-      return;
-    }
+    const md = navigator.mediaDevices;
+    if (!md || !md.getDisplayMedia) { alert('Your browser does not support tab capture. Use a recent Chrome, Edge or Firefox on desktop.'); return; }
+    if (!window.isSecureContext) { alert('Tab capture only works on https:// or localhost pages.'); return; }
     const btn = $('#dlPng'), label = btn.textContent;
     let stream;
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser' }, audio: false,
-        preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude'
-      });
-    } catch (e) { return; } // user cancelled
+      try { stream = await md.getDisplayMedia({ video: true, audio: false, preferCurrentTab: true }); }
+      catch (e1) {
+        if (e1 && e1.name === 'NotAllowedError') throw e1;
+        stream = await md.getDisplayMedia({ video: true, audio: false });
+      }
+    } catch (e) {
+      alert(e && e.name === 'NotAllowedError'
+        ? 'Screen capture was cancelled or blocked. Click Download PNG again and choose "Share" for this tab.'
+        : 'Could not start tab capture: ' + ((e && e.message) || e));
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Saving PNG…';
     try {
+      const track = stream.getVideoTracks()[0];
+      const surface = track && track.getSettings ? track.getSettings().displaySurface : 'browser';
       const video = document.createElement('video');
       video.srcObject = stream; video.muted = true; video.playsInline = true;
       await video.play();
-      await new Promise(r => setTimeout(r, 500)); // let the first clean frame arrive
+      await new Promise(r => {
+        if (video.requestVideoFrameCallback) { video.requestVideoFrameCallback(() => setTimeout(r, 250)); setTimeout(r, 1500); }
+        else setTimeout(r, 800);
+      });
       const vw = video.videoWidth, vh = video.videoHeight;
-      const rect = $('#map').getBoundingClientRect();
-      const sx = vw / window.innerWidth, sy = vh / window.innerHeight;
+      if (!vw || !vh) throw new Error('No video frame received.');
       const out = document.createElement('canvas');
-      out.width = Math.round(rect.width * sx); out.height = Math.round(rect.height * sy);
-      out.getContext('2d').drawImage(video, rect.left * sx, rect.top * sy, rect.width * sx, rect.height * sy, 0, 0, out.width, out.height);
-      await new Promise(res => out.toBlob(b => {
-        if (b) {
-          const url = URL.createObjectURL(b), a = document.createElement('a');
-          a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
-          document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 5000);
-        }
-        res();
-      }, 'image/png'));
+      const cx = out.getContext('2d');
+      if (surface === 'browser') {
+        const rect = $('#map').getBoundingClientRect();
+        const sx = vw / window.innerWidth, sy = vh / window.innerHeight;
+        out.width = Math.round(rect.width * sx); out.height = Math.round(rect.height * sy);
+        cx.drawImage(video, rect.left * sx, rect.top * sy, rect.width * sx, rect.height * sy, 0, 0, out.width, out.height);
+      } else {
+        out.width = vw; out.height = vh; cx.drawImage(video, 0, 0);
+        alert('You shared a window/screen instead of this browser tab, so the whole capture was saved uncropped. Next time pick the "Chrome Tab" / "This tab" option.');
+      }
+      const blob = await new Promise(res => out.toBlob(res, 'image/png'));
+      if (!blob) throw new Error('Could not create the image.');
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      alert('PNG export failed: ' + ((e && e.message) || e));
     } finally {
       stream.getTracks().forEach(t => t.stop());
       btn.disabled = false; btn.textContent = label;
     }
-  };
-  $('#dlPng').onclick = async () => {
-    const src = state.canvas;
-    if (!src || !src.width || !src.height) { alert('Load the map and data first.'); return; }
-    const btn = $('#dlPng'), label = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Preparing PNG…';
-    try {
-      render();
-      const mt = $('#basemap').value, dark = (mt === 'dark' || mt === 'gray' || mt === 'satellite');
-      const W = src.width, H = src.height;
-      const out = document.createElement('canvas'); out.width = W; out.height = H;
-      const x = out.getContext('2d');
-      x.fillStyle = dark ? '#1a1d24' : '#f3f1ec'; x.fillRect(0, 0, W, H);
-      const gotMap = await drawBasemapTiles(x, W, H);
-      x.drawImage(src, 0, 0);
-
-      const layers = state.layers.filter(L => L.visible && L.pts.length);
-      if (layers.length) {
-        const pw = 270, rowH = 62, ph = 14 + layers.length * rowH;
-        const px0 = 12, py0 = H - ph - 12;
-        x.fillStyle = 'rgba(22,25,32,.92)'; x.strokeStyle = '#2c3240'; x.lineWidth = 1;
-        x.beginPath(); x.roundRect ? x.roundRect(px0, py0, pw, ph, 10) : x.rect(px0, py0, pw, ph);
-        x.fill(); x.stroke();
-        layers.forEach((L, i) => {
-          const y = py0 + 12 + i * rowH, lx = px0 + 12, bw = pw - 24;
-          x.fillStyle = '#f0f2f5'; x.font = '700 12px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
-          x.textBaseline = 'top'; x.textAlign = 'left';
-          let t = labelOf(L); while (t.length > 3 && x.measureText(t).width > bw) t = t.slice(0, -2) + '…';
-          x.fillText(t, lx, y);
-          const lut = RAMPS[L.ramp].lut, g = x.createLinearGradient(lx, 0, lx + bw, 0);
-          for (let k = 0; k <= 10; k++) { const j = Math.round(255 * k / 10) * 4; g.addColorStop(k / 10, 'rgb(' + lut[j] + ',' + lut[j + 1] + ',' + lut[j + 2] + ')'); }
-          x.fillStyle = g; x.fillRect(lx, y + 18, bw, 9);
-          x.fillStyle = '#949ba6'; x.font = '10.5px -apple-system,Segoe UI,Roboto,Arial,sans-serif';
-          [0, .25, .5, .75, 1].forEach((f, k) => {
-            x.textAlign = k === 0 ? 'left' : k === 4 ? 'right' : 'center';
-            x.fillText(nf1.format(unnorm(f, L.scale, L.max)), lx + bw * f, y + 31);
-          });
-          x.textAlign = 'left';
-          x.fillText(L.pts.length.toLocaleString() + ' pincodes · Max: ' + nf1.format(L.max), lx, y + 45);
-        });
-      }
-      if (gotMap) {
-        x.font = '10px Arial,sans-serif'; x.textAlign = 'right'; x.textBaseline = 'bottom';
-        const txt = 'Map data © Google';
-        x.fillStyle = dark ? 'rgba(0,0,0,.55)' : 'rgba(255,255,255,.7)';
-        x.fillRect(W - x.measureText(txt).width - 14, H - 17, x.measureText(txt).width + 14, 17);
-        x.fillStyle = dark ? '#ddd' : '#333'; x.fillText(txt, W - 6, H - 3);
-      } else {
-        alert('Could not load the basemap for the PNG (enable "Maps Static API" for your API key). Saved with a plain background instead.');
-      }
-      out.toBlob(b => {
-        if (!b) return;
-        const url = URL.createObjectURL(b), a = document.createElement('a');
-        a.href = url; a.download = 'heatmap_' + new Date().toISOString().slice(0, 10) + '.png';
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-      }, 'image/png');
-    } finally { btn.disabled = false; btn.textContent = label; }
   };
 
   $('#loadMap').onclick = startMap;
