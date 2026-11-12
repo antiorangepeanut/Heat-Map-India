@@ -15,20 +15,17 @@
   html,body{height:100%;margin:0}
   body{display:flex;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}
   
-  /* Sidebar layout */
   #side{width:370px;min-width:370px;height:100%;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line);z-index:10;box-shadow:4px 0 16px rgba(0,0,0,0.35)}
   .side-head{padding:14px 16px 10px;border-bottom:1px solid var(--line)}
   .title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
   h1{font-size:16px;font-weight:700;margin:0;letter-spacing:.01em;color:#fff}
   
-  /* Status Pill */
   #statusPill{font-size:11px;padding:3px 9px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);cursor:pointer;color:var(--muted);user-select:none;white-space:nowrap}
   #statusPill.ok{color:var(--good);border-color:rgba(34,197,94,.35)}
   #statusPill.err{color:var(--bad);border-color:rgba(239,68,68,.4)}
   #setupDrawer{display:none;margin-top:10px;padding:10px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px}
   #setupDrawer.open{display:block}
 
-  /* Navigation Tabs */
   .tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
   .tab-btn{background:transparent;border:1px solid transparent;color:var(--muted);padding:7px 6px;border-radius:7px;font-weight:600;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;transition:.15s}
   .tab-btn:hover{color:var(--text);background:rgba(255,255,255,.03)}
@@ -36,7 +33,6 @@
   .badge{background:var(--accent);color:var(--accent-fg);font-size:10px;font-weight:700;padding:1px 5px;border-radius:99px;display:none}
   .badge.on{display:inline-block}
 
-  /* Tab Panels */
   .tab-body{flex:1;overflow-y:auto;padding:14px}
   .tab-pane{display:none}
   .tab-pane.active{display:block}
@@ -54,7 +50,6 @@
   input:focus,select:focus{border-color:var(--accent)}
   input[type=range]{width:100%;accent-color:var(--accent)}
   
-  /* Dropzone */
   .dropzone{border:1.5px dashed var(--line);border-radius:9px;padding:16px 12px;text-align:center;cursor:pointer;background:rgba(255,255,255,.015);transition:.15s;display:block}
   .dropzone:hover,.dropzone.drag{border-color:var(--accent);background:rgba(234,179,8,.06)}
   .dropzone b{color:var(--accent);display:block;margin-bottom:3px;font-size:13px}
@@ -64,7 +59,7 @@
   button:hover:not(:disabled){border-color:var(--accent);color:#fff}
   button:disabled{opacity:.35;cursor:default}
   button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:700;width:100%;margin-top:6px}
-  button.primary:hover:not(:disabled){filter:brightness(1.08);color:var(--accent-fg)}
+  button.primary:hover:not(:disabled){filter:brightness(1.08)}
 
   .note{color:var(--muted);margin:6px 0 0;font-size:12px}
   .help{color:var(--muted);margin:3px 0 0;font-size:11.5px;line-height:1.4}
@@ -76,11 +71,6 @@
   .field>span output{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
   
-  details.plain{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
-  details.plain>summary{cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;user-select:none}
-  details.plain>summary:hover{color:var(--text)}
-  
-  /* Slicers */
   details.sl{border:1px solid var(--line);border-radius:8px;margin-top:7px;background:var(--panel)}
   details.sl>summary{cursor:pointer;padding:8px 10px;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:500}
   details.sl>summary::-webkit-details-marker{display:none}
@@ -94,7 +84,6 @@
   .btns{display:flex;gap:6px;align-items:center;margin-top:6px}
   .btns .cnt{margin-left:auto;color:var(--muted);font-size:11.5px}
 
-  /* Layer Cards */
   .lcard{border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:10px;margin-top:8px}
   .lhead{display:flex;align-items:center;gap:8px}
   .lhead b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
@@ -107,7 +96,6 @@
   .frow{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-top:6px}
   .frow button{padding:2px 9px}
 
-  /* Floating HUD */
   #hud{position:absolute;z-index:6;left:12px;top:12px;width:290px;max-height:calc(100% - 24px);overflow:auto;background:rgba(22,25,32,.92);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 4px 20px rgba(0,0,0,.4)}
   .pin-search{display:flex;gap:6px;margin-bottom:8px}
   .pin-search input{padding:5px 8px;font-size:12px}
@@ -124,7 +112,6 @@
 
   #empty{position:absolute;z-index:2;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:var(--muted);text-align:center;padding:20px;font-size:14px}
   
-  /* Info Card */
   #card{position:absolute;z-index:7;right:12px;top:12px;width:320px;max-height:75%;overflow:auto;display:none;background:rgba(22,25,32,.96);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.55;box-shadow:0 6px 24px rgba(0,0,0,.5)}
   #card .ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
   #card .ch b{font-size:14px;color:var(--accent)}
@@ -161,7 +148,7 @@
   </nav>
 
   <div class="tab-body">
-    <!-- TAB 1: DATA & POPUP CONFIG -->
+    <!-- TAB 1: DATA & PIVOT CONFIG -->
     <div id="tabData" class="tab-pane active">
       <section>
         <h2>Upload Dataset</h2>
@@ -180,21 +167,22 @@
             <span>Pincode Column</span>
             <select id="pinCol"></select>
           </div>
+          <div class="field" style="margin-top:12px;">
+            <span>Primary Column (Pivot / Group By)</span>
+            <div id="pivotSheetRow" style="display:none; margin-bottom:6px;">
+              <select id="pivotSheetSel"></select>
+            </div>
+            <select id="pivotColSel"></select>
+            <p class="help">All popup card details will group and pivot around this primary column (e.g., Store Name, Dealer, SKU).</p>
+          </div>
         </div>
       </section>
 
       <section id="popupSection" style="display:none">
-        <h2>Map Click Card (Popup)</h2>
-        <p class="help" style="margin-top:0">Choose extra columns to display when you click a pincode on the map.</p>
+        <h2>Popup Card Metric Columns</h2>
+        <p class="help" style="margin-top:0">Additional fields to display inside pincode cards.</p>
         <div id="infoFields"></div>
-        <button id="addField" type="button" style="width:100%;margin-top:8px">+ Add column to popup card</button>
-
-        <details id="pivotConfig" class="plain">
-          <summary>Group popup by Store / Entity (Pivot)</summary>
-          <p class="help">Group rows inside a pincode by a primary column (e.g., Store Name or Dealer).</p>
-          <div class="field"><span>Pivot Sheet</span><select id="pivotSheetSel"></select></div>
-          <div class="field"><span>Group By Column</span><select id="pivotColSel"></select></div>
-        </details>
+        <button id="addField" type="button" style="width:100%;margin-top:8px">+ Add metric column</button>
       </section>
     </div>
 
@@ -202,10 +190,14 @@
     <div id="tabFilters" class="tab-pane">
       <section>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <h2 style="margin:0">Sheet Slicers</h2>
+          <h2 style="margin:0">Filters & Slicers</h2>
           <button id="resetSlicers" type="button" style="padding:3px 8px;font-size:11px;display:none">Reset all</button>
         </div>
-        <p class="help" style="margin-top:0">Filter rows for the active sheet. Active filters highlight in yellow.</p>
+        <div id="filterSheetRow" class="field" style="margin-bottom:10px; display:none">
+          <span>Target Sheet for Filters</span>
+          <select id="filterSheetSel"></select>
+        </div>
+        <p class="help" style="margin-top:0">Filter rows for the selected sheet. Active filters highlight in yellow.</p>
         <div id="slicers"><p class="note">Upload data in Tab 1 to generate slicers.</p></div>
       </section>
     </div>
